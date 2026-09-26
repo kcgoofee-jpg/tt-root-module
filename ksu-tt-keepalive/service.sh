@@ -167,13 +167,20 @@ check_quota() {
 maybe_backup() {
     [ "$(cfg backup 1)" = 1 ] && unlocked || return
     hrs=$(cfg backup_hours 6); [ "$hrs" -ge 1 ] 2>/dev/null || hrs=6
+    # 电量低于 15% 且没在充电：可能很快没电关机。数据有变化、上次备份超过 30 分钟，就提前备份一次（每次放电只一次）
+    rescue=""
+    if low_battery 15; then [ -z "$rescued" ] && rescue=1; else rescued=""; fi
     for tg in $(present_targets); do
         [ "$tg" = tt ] && { [ "$installed" = yes ] && [ "$gen" = 0 ] || continue; }
         lb=$(state_get "$(t_key "$tg" last_backup)"); lb=${lb:-0}
         chk=$(state_get "$(t_key "$tg" last_backup_check)"); chk=${chk:-0}
         tried=$(state_get "$(t_key "$tg" backup_try)"); tried=${tried:-0}
-        [ $((now - lb)) -ge $((hrs * 3600)) ] && [ $((now - chk)) -ge $((hrs * 3600)) ] \
-            && [ $((now - tried)) -ge 3600 ] || continue
+        if [ -n "$rescue" ] && [ $((now - lb)) -ge 1800 ] && [ $((now - tried)) -ge 600 ]; then
+            rescued=1
+        else
+            [ $((now - lb)) -ge $((hrs * 3600)) ] && [ $((now - chk)) -ge $((hrs * 3600)) ] \
+                && [ $((now - tried)) -ge 3600 ] || continue
+        fi
         if ! space_ok "$tg"; then
             if [ "$(state_get space_day)" != "$day" ]; then
                 state_set space_day "$day"
@@ -194,6 +201,7 @@ maybe_backup() {
             dropped=$(apply_retention | wc -l | tr -d ' ')
             prune_prerestore >/dev/null
             extra=""; [ "$dropped" -gt 0 ] 2>/dev/null && extra="；按分层保留清掉 $dropped 份旧的"
+            [ -n "$rescue" ] && extra="；电量低于 15%，提前备份$extra"
             log "已备份并校验 $(t_label "$tg") 数据：${bf##*/}（$kb KB，不含 API 密钥）$extra"
         else
             fk=$(t_key "$tg" backup_fails)
@@ -202,6 +210,32 @@ maybe_backup() {
             [ "$fails" = 3 ] && alert "$(t_label "$tg") 备份连续失败 3 次" "请在 KernelSU 中打开 TT 守护查看详情。"
         fi
     done
+}
+
+# 开机后（手机解锁后）检查一次：断电、没电关机可能留下写到一半的备份，或中断的恢复
+after_boot() {
+    for n in $(check_backups); do
+        log "最新备份校验失败，已隔离：$n（可能是备份时断电）"
+        alert "备份文件损坏，已隔离" "$n 校验失败，可能是备份时断电。其余备份不受影响。"
+    done
+    p=$(cat "$GDIR/restore.pending" 2>/dev/null)
+    if [ -n "$p" ]; then
+        name=${p%%|*}; safety=${p#*|}
+        for tg in $TARGETS; do rm -rf "$(t_root "$tg")/.cc-restore"; done
+        log "上次恢复未完成（断电或重启）：$name；恢复前的数据在 $safety"
+        state_set restore_interrupted "$p"
+        alert "上次恢复未完成" "恢复 $name 时中断。请在 TT 守护中重新恢复；恢复前的数据已另存为 $safety。"
+        rm -f "$GDIR/restore.pending"
+    fi
+}
+
+# 省电模式开关变化时记一行。省电模式下后台应用更容易被结束，本模块的备份照常进行
+check_power() {
+    ps_now=$(power_save)
+    [ "$ps_now" = "$power_prev" ] && return
+    if [ -n "$ps_now" ]; then log "系统已开启$ps_now：后台应用可能被限制"
+    elif [ -n "$power_prev" ]; then log "系统已关闭省电模式"; fi
+    power_prev=$ps_now
 }
 
 # 备份太久没成功（每个酒馆分开）、太久没拷到电脑：每天最多各提醒一次
@@ -279,6 +313,7 @@ tick() {
     disabled_logged=""
     if [ $((now - last_check)) -ge $CHECK ]; then
         ensure
+        check_power
         last_check=$now
     fi
 
@@ -291,8 +326,7 @@ tick() {
     fi
     gen=0
     [ -n "$pids" ] && [ -z "$idle_frozen" ] && generating && gen=1
-    if [ "$gen" = 1 ] && [ "$gen_prev" != 1 ]; then gen_alerted=""; net_alerted=""
-temp_alerted=""; temp_alerted=""; gen_start=$now; fi
+    if [ "$gen" = 1 ] && [ "$gen_prev" != 1 ]; then gen_alerted=""; net_alerted=""; temp_alerted=""; gen_start=$now; fi
     [ "$gen" = 0 ] && [ "$gen_prev" = 1 ] && [ -n "$pids" ] && { gen_end; check_quota; }
 
     # 换了一天：日志只留 7 天
@@ -343,6 +377,7 @@ temp_alerted=""; temp_alerted=""; gen_start=$now; fi
         migrated=1
         mv_n=$(migrate_backups)
         [ "$mv_n" -gt 0 ] 2>/dev/null && log "把 $mv_n 个备份文件搬到了 $(bdir)"
+        after_boot
     fi
 
     maybe_backup
@@ -387,4 +422,6 @@ last_reopen=0
 last_day=""
 migrated=""
 disabled_logged=""
+rescued=""
+power_prev=""
 [ "${TT_KEEPALIVE_TEST:-}" = 1 ] || main

@@ -15,6 +15,9 @@ case "$n" in NONE) echo "网络：没被限制" ;; '') echo "网络：看不到�
 t=$(battery_temp); c=$(soc_temp); b=$(board_temp)
 [ -n "$t$c$b" ] && echo "温度：电池 ${t:-—}°C，处理器 ${c:-—}°C，主板 ${b:-—}°C"
 echo "TT 版本：$(tt_version)；系统浏览器内核：$(webview_version)"
+l=$(battery_level); ps_=$(power_save)
+[ -n "$l" ] && echo "电量：$l%$(charging && echo "，充电中")${ps_:+；已开启$ps_}"
+echo "Root 管理器：$(root_manager)"
 
 pids=$(pidof "$PKG" 2>/dev/null)
 if [ -z "$pids" ]; then

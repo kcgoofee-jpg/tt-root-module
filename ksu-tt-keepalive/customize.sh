@@ -20,4 +20,11 @@ if [ -d "$OLD" ] && [ ! -f "$G/prior.txt" ]; then
 fi
 ui_print "- TT 守护：自动检测 TauriTavern、SillyDroid、Termux 版 SillyTavern，重启后生效"
 ui_print "- 备份位置：/data/adb/tt-backups（私密存储，不含 API 密钥）"
-ui_print "- 在 KernelSU 模块列表中点击本模块可打开界面"
+# 不同 Root 管理器：界面的打开方式不同（安装环境里 KSU / APATCH / MAGISK_VER_CODE 由管理器设置）
+if [ "${KSU:-}" = true ] || [ "${APATCH:-}" = true ]; then
+    ui_print "- 在管理器的模块列表中点击本模块可打开界面"
+elif [ -n "${MAGISK_VER_CODE:-}" ]; then
+    ui_print "- Magisk 不能直接打开模块界面：可安装 WebUI X 等应用打开，或使用模块的「执行」按钮（Magisk 28 以上）"
+else
+    ui_print "- 未识别的 Root 管理器：自动备份照常运行，界面可能无法打开"
+fi

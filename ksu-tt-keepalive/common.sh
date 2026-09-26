@@ -421,8 +421,9 @@ backup_now() {
         && tar -tzf "$part" > "$part.list" 2>/dev/null \
         && grep -q 'default-user/' "$part.list" \
         && ! grep -qE '(^|/)(secrets\.json|cookie-secret\.txt)$' "$part.list" \
-        && mv "$part" "$d/$name"; then
-        sha_line "$d" "$name" > "$d/$name.sha256" && good=1
+        && sync && mv "$part" "$d/$name"; then
+        # sync：先把内容写到存储上再改名，断电时不会留下名字完整、内容不完整的备份
+        sha_line "$d" "$name" > "$d/$name.sha256" && sync && good=1
     fi
     set +f
     if [ $good = 1 ]; then
@@ -438,6 +439,21 @@ backup_now() {
     [ $good = 1 ] && echo "$(bdir)/$name"
     rm -rf "${lock:?}"
     [ $good = 1 ]
+}
+
+# 开机后检查一次（断电、没电关机后）：清掉写到一半的临时文件；每个酒馆最新的备份校验不对就改名隔离
+# （加 .broken，不再出现在列表里，也不参与分层保留）。输出隔离的文件名
+check_backups() {
+    d=$(bdir)
+    rm -f "$d"/.*.part "$d"/.*.part.list 2>/dev/null
+    for cb_ in $TARGETS; do
+        n=$(list_backups "$cb_" | head -n 1)
+        [ -n "$n" ] && [ -s "$d/$n.sha256" ] || continue
+        want=$(cut -d' ' -f1 "$d/$n.sha256")
+        got=$( { sha256sum "$d/$n" 2>/dev/null || shasum -a 256 "$d/$n"; } | cut -d' ' -f1)
+        [ "$want" = "$got" ] && continue
+        mv "$d/$n" "$d/$n.broken" && rm -f "$d/$n.sha256" && echo "$n"
+    done
 }
 
 # 按天 / 周 / 月分层保留（见 retention.awk，每个目标分开算），删掉多出来的。输出删掉的文件名
@@ -481,6 +497,46 @@ battery_temp() {
     case "$t" in ''|*[!0-9-]*) return ;; esac
     echo $((t / 10))
 }
+
+# 电量（%）和充电状态。读不到电量时 low_battery 当作不低
+BATTERY_DIR=${BATTERY_DIR:-/sys/class/power_supply/battery}
+battery_level() {
+    l=$(cat "$BATTERY_DIR/capacity" 2>/dev/null)
+    case "$l" in ''|*[!0-9]*) return ;; esac
+    echo "$l"
+}
+charging() { case "$(cat "$BATTERY_DIR/status" 2>/dev/null)" in Charging|Full) return 0 ;; esac; return 1; }
+low_battery() { l=$(battery_level); [ -n "$l" ] && [ "$l" -lt "${1:-15}" ] && ! charging; }
+
+# 省电模式：Android 自带的省电（多数厂商的省电、超级省电也会打开它），加上已知的厂商开关。
+# 输出名称，没开时什么都不输出。厂商开关各版本可能不同，读不到就当没开
+power_save() {
+    if [ "$(settings get global low_power 2>/dev/null)" = 1 ]; then echo 省电模式
+    elif [ "$(settings get secure EXTREME_POWER_MODE_ENABLE 2>/dev/null)" = 1 ]; then echo 极致省电
+    elif [ "$(settings get system POWER_SAVE_MODE_OPEN 2>/dev/null)" = 1 ]; then echo 省电模式
+    elif [ "$(settings get system SmartModeStatus 2>/dev/null)" = 4 ]; then echo 超级省电
+    fi
+}
+
+# Root 管理器：输出「名称（版本）」。KernelSU 的分支（KernelSU Next、SukiSU Ultra）按管理器应用区分
+ADB_DIR=${ADB_DIR:-/data/adb}
+root_manager() (
+    pk=$(pm list packages 2>/dev/null)
+    has() { printf '%s\n' "$pk" | grep -qx "package:$1"; }
+    if [ -d "$ADB_DIR/ap" ]; then
+        n=APatch; v=$("$ADB_DIR/apd" -V 2>/dev/null | head -n 1)
+    elif [ -d "$ADB_DIR/ksu" ]; then
+        n=KernelSU
+        has com.rifsxd.ksunext && n="KernelSU Next"
+        has com.sukisu.ultra && n="SukiSU Ultra"
+        v=$("$ADB_DIR/ksud" -V 2>/dev/null | head -n 1)
+    elif [ -d "$ADB_DIR/magisk" ]; then
+        n=Magisk; v=$(magisk -v 2>/dev/null | cut -d: -f1)
+    else
+        echo 未识别; return
+    fi
+    echo "$n${v:+（$v）}"
+)
 
 # 某个温度传感器（/sys/class/thermal 里 type 等于 $1 的第一个）的整数 °C；读不到或读数不合理（没接的传感器
 # 常报 -274 / 125 之类）就什么都不输出。$2 可以给第二个候选名（不同机型叫法不同）

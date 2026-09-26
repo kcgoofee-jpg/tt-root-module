@@ -40,13 +40,15 @@ mk am 'case "$1" in get-standby-bucket) echo "$FAKE_BUCKET" ;; *) echo "am $*" >
 mk logcat 'cat "$FAKE_LOGCAT" 2>/dev/null'
 mk pm 'case "$1" in
   path) [ "$FAKE_INSTALLED" = 1 ] ;;
-  list) [ -n "$FAKE_PMUID" ] && echo "package:com.tauritavern.client uid:$FAKE_PMUID" ;;
+  list) [ -n "$FAKE_PMUID" ] && echo "package:com.tauritavern.client uid:$FAKE_PMUID"
+        for p in ${FAKE_PKGS:-}; do echo "package:$p"; done ;;
 esac'
 mk pidof 'echo "$FAKE_PIDS"'
 mk su 'echo "su $*" >> "$CALLS"; [ "$1" = 2000 ] && [ "$2" = -c ] && eval "$3"'
 mk getprop 'case "$1" in sys.user.0.ce_available) echo "$FAKE_CE" ;; *) echo 1 ;; esac'
 mk stat 'echo 10447'
 mk sleep ':'
+mk settings 'case "$2 $3" in "global low_power") echo "${FAKE_LOWPOWER:-0}" ;; *) echo null ;; esac'
 # df：设了 FAKE_FREE（KB）就假装只剩这么多，否则用真的
 mk df 'if [ -n "${FAKE_FREE:-}" ]; then echo "Filesystem 1K-blocks Used Available Use% Mounted"; echo "/dev/x 100000000 1 $FAKE_FREE 1% /"; else exec /bin/df "$@"; fi'
 # date：永远是 FAKE_NOW 那一刻；支持 date -d @秒数（Mac 的 date 用 -r，手机上的用 -d）
@@ -61,7 +63,8 @@ DAY0=86400   # 1970-01-02 00:00 UTC，按天算的用例从这里开始
 newmod() {   # 新建一个空的模块目录（放进脚本），设好环境
     D=$T/mod$1; rm -rf "$D"; mkdir -p "$D"; cp "$MOD"/*.sh "$MOD"/*.awk "$MOD/module.prop" "$D/"
     export TT_MODDIR=$D TT_GUARD_DIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1 TT_DATA=$T/data$1 PRIVATE_BK=$T/backup$1 SHARED_BK=$T/shared$1 \
-           TT_LOGS=$T/ttlogs$1 ANR_DIR=$T/anr$1 BATTERY_TEMP=$T/temp$1
+           TT_LOGS=$T/ttlogs$1 ANR_DIR=$T/anr$1 BATTERY_TEMP=$T/temp$1 \
+           BATTERY_DIR=$T/bat$1 ADB_DIR=$T/adb$1
     : > "$CALLS"
     BACKUP_DIR=$PRIVATE_BK   # 默认 backup_private=1
 }
@@ -650,7 +653,7 @@ mkdir -p "$TT_DATA/default-user/chats"; echo "秘密聊天" > "$TT_DATA/default-
 echo "01-01 10:00:00 x" > "$TT_MODDIR/service.log"
 out=$(sh "$TT_MODDIR/ui.sh" selftest)
 if command -v python3 >/dev/null 2>&1; then
-    check "自检是合法 JSON，10 项" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d)==10 and all(set(x)=={\"name\",\"ok\",\"detail\"} for x in d)"'
+    check "自检是合法 JSON，12 项" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d)==12 and all(set(x)=={\"name\",\"ok\",\"detail\"} for x in d)"'
 fi
 check "自检：检测到酒馆数据" 'printf "%s" "$out" | grep -q "\"name\":\"酒馆数据\",\"ok\":true"'
 check "自检：还没有备份时报出来" 'printf "%s" "$out" | grep -q "\"name\":\"最新备份\",\"ok\":false"'
@@ -823,6 +826,110 @@ while [ $i -lt 50 ] && [ -d "$G" ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done
 check "读新位置的原值（撤白名单）" 'calls | grep -q "whitelist -com.tauritavern.client"'
 check "数据目录删掉" '[ ! -d "$G" ]'
 check "备份没删（搬到共享位置）" '[ -f "$SHARED_BK/tt-default-user-19700101-000000.tar.gz" ]'
+
+echo "[断电 / 没电] 低电量提前备份"
+bat() { mkdir -p "$BATTERY_DIR"; echo "$1" > "$BATTERY_DIR/capacity"; echo "$2" > "$BATTERY_DIR/status"; }
+newmod 60; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"
+    bat 80 Discharging; FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    check "先有一份正常备份" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
+    touch -t 200001010000 "$TT_MODDIR/backup.marker"
+    FAKE_NOW=$((DAY0 + 1200)); bat 12 Discharging; tick
+    check "低电量：不到 30 分钟不提前备份" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
+    FAKE_NOW=$((DAY0 + 3600)); tick
+    check "低电量、数据变了：不等 6 小时提前备份" '[ "$(bk | wc -l | tr -d " ")" = 2 ] && grep -q "电量低于 15%，提前备份" "$LOG"'
+    touch -t 200001010000 "$TT_MODDIR/backup.marker"; FAKE_NOW=$((DAY0 + 7200)); tick
+    check "同一次放电只提前一次" '[ "$(bk | wc -l | tr -d " ")" = 2 ]'
+    bat 12 Charging; FAKE_NOW=$((DAY0 + 7300)); tick
+    bat 10 Discharging; FAKE_NOW=$((DAY0 + 7400)); tick
+    check "充过电再低电量：可以再提前一次" '[ "$(bk | wc -l | tr -d " ")" = 3 ]'
+    touch -t 200001010000 "$TT_MODDIR/backup.marker"; bat 60 Discharging; FAKE_NOW=$((DAY0 + 9500)); tick
+    check "电量正常：照常按间隔" '[ "$(bk | wc -l | tr -d " ")" = 3 ]'
+    rm -rf "$BATTERY_DIR"; FAKE_NOW=$((DAY0 + 9600)); tick
+    check "读不到电量：当作正常" '[ "$(bk | wc -l | tr -d " ")" = 3 ]'
+    )
+
+echo "[断电 / 没电] 开机检查：写坏的备份隔离"
+newmod 61; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"
+    FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    touch -t 200001010000 "$TT_MODDIR/backup.marker"; FAKE_NOW=$((DAY0 + 7 * 3600)); tick
+    n=$(bk | sort | tail -n 1); o=$(bk | sort | head -n 1)
+    printf 'x' > "$BACKUP_DIR/$n"                                  # 模拟：改名完成，内容没写进存储就断电
+    echo half > "$BACKUP_DIR/.tt-default-user-19700102-080000.tar.gz.part"
+    migrated=""; : > "$CALLS"; FAKE_NOW=$((DAY0 + 8 * 3600)); tick
+    check "最新的备份校验不对：改名隔离" '[ -f "$BACKUP_DIR/$n.broken" ] && [ ! -f "$BACKUP_DIR/$n" ] && [ ! -f "$BACKUP_DIR/$n.sha256" ]'
+    check "隔离的不出现在列表里" '! list_backups | grep -q "$n"'
+    check "旧的完好备份不动" '[ -f "$BACKUP_DIR/$o" ] && [ -f "$BACKUP_DIR/$o.sha256" ]'
+    check "写到一半的临时文件清掉" '[ -z "$(ls -a "$BACKUP_DIR" | grep "\.part")" ]'
+    check "记日志并通知" 'grep -q "最新备份校验失败，已隔离" "$LOG" && calls | grep -q "备份文件损坏，已隔离"'
+    migrated=""; : > "$CALLS"; FAKE_NOW=$((DAY0 + 9 * 3600)); tick
+    check "再开机：完好的不误报" '! calls | grep -q "备份文件损坏"'
+    )
+
+echo "[断电 / 没电] 恢复中途断电"
+newmod 62
+U=$TT_DATA/default-user; mkdir -p "$U/chats" "$BACKUP_DIR"; echo "旧" > "$U/chats/1.jsonl"
+( cd "$TT_DATA" && tar -czf "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz" default-user )
+mkdir -p "$BATTERY_DIR"; echo 9 > "$BATTERY_DIR/capacity"; echo Discharging > "$BATTERY_DIR/status"
+sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
+check "电量低于 15% 且没充电：不恢复" '[ $r = 10 ] && grep -q "请先充电" "$T/r.out" && [ ! -d "$TT_MODDIR/.restore.lock" ]'
+echo Charging > "$BATTERY_DIR/status"
+sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
+check "低电量但在充电：可以恢复" '[ $r = 0 ]'
+check "恢复完成：没有留下「未完成」标记" '[ ! -f "$TT_MODDIR/restore.pending" ]'
+( load
+    echo "tt-default-user-19700101-000000.tar.gz|tt-default-user-19700101-000100-prerestore.tar.gz" > "$TT_MODDIR/restore.pending"
+    mkdir -p "$TT_DATA/.cc-restore/default-user"
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0; : > "$CALLS"
+    FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    check "开机发现恢复没做完：通知，说明恢复前的数据在哪" 'calls | grep -q "上次恢复未完成" && calls | grep -q "prerestore"'
+    check "清掉残留的临时目录" '[ ! -e "$TT_DATA/.cc-restore" ]'
+    check "界面能看到" 'sh "$TT_MODDIR/ui.sh" status | grep -q "\"restore_interrupted\":\"tt-default-user-19700101-000000.tar.gz|"'
+    check "只提醒一次" '[ ! -f "$TT_MODDIR/restore.pending" ]'
+    )
+sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > /dev/null
+check "重新恢复成功后界面不再提示" 'sh "$TT_MODDIR/ui.sh" status | grep -q "\"restore_interrupted\":\"\""'
+
+echo "[省电模式]"
+newmod 63; ( load
+    check_power; check "没开：不记" '! grep -q 省电 "$LOG" 2>/dev/null'
+    export FAKE_LOWPOWER=1; check_power
+    check "开启时记一行" 'grep -q "系统已开启省电模式" "$LOG"'
+    check_power
+    check "不重复记" '[ "$(grep -c 省电模式 "$LOG")" = 1 ]'
+    export FAKE_LOWPOWER=0; check_power; check "关闭时记一行" 'grep -q "系统已关闭省电模式" "$LOG"'
+    out=$(FAKE_LOWPOWER=1 sh "$TT_MODDIR/ui.sh" selftest)   # 给外部命令的前缀赋值是安全的
+    check "自检里显示" 'printf "%s" "$out" | grep -q "\"name\":\"省电模式\",\"ok\":false"'
+    mkdir -p "$BATTERY_DIR"; echo 55 > "$BATTERY_DIR/capacity"; echo Charging > "$BATTERY_DIR/status"
+    check "状态里有电量和充电" 'sh "$TT_MODDIR/ui.sh" status | grep -q "\"power\":{\"level\":55,\"charging\":true,\"saver\":\"\"}"'
+    )
+
+echo "[Root 管理器]"
+newmod 64; ( load
+    check "识别不了：未识别" '[ "$(root_manager)" = 未识别 ]'
+    mkdir -p "$ADB_DIR/ksu"; printf '#!/bin/sh\necho "ksud 3.3.0"\n' > "$ADB_DIR/ksud"; chmod +x "$ADB_DIR/ksud"
+    check "KernelSU 带版本" '[ "$(root_manager)" = "KernelSU（ksud 3.3.0）" ]'
+    check "KernelSU Next" '[ "$(export FAKE_PKGS=com.rifsxd.ksunext; root_manager)" = "KernelSU Next（ksud 3.3.0）" ]'
+    check "SukiSU Ultra" '[ "$(export FAKE_PKGS="x com.sukisu.ultra"; root_manager)" = "SukiSU Ultra（ksud 3.3.0）" ]'
+    check "包名只按整行匹配" '[ "$(export FAKE_PKGS=com.sukisu.ultra.fake; root_manager)" = "KernelSU（ksud 3.3.0）" ]'
+    rm -rf "$ADB_DIR"; mkdir -p "$ADB_DIR/ap"
+    check "APatch" '[ "$(root_manager)" = APatch ]'
+    rm -rf "$ADB_DIR"; mkdir -p "$ADB_DIR/magisk"
+    check "Magisk" 'case "$(root_manager)" in Magisk*) true ;; *) false ;; esac'
+    out=$(sh "$TT_MODDIR/ui.sh" selftest)
+    check "Magisk：自检说明界面的打开方式" 'printf "%s" "$out" | grep -q "需另装 WebUI X"'
+    check "action 输出里有" 'sh "$TT_MODDIR/action.sh" | grep -q "Root 管理器：Magisk"'
+    )
+G=$T/guard65
+( ui_print() { echo "$*" >> "$T/ui65"; }; MODPATH=$T/new MAGISK_VER_CODE=28100 TT_GUARD_DIR=$G; . "$MOD/customize.sh" )
+check "安装时：Magisk 提示界面打开方式" 'grep -q "Magisk 不能直接打开模块界面" "$T/ui65"'
+rm -f "$T/ui65"
+( ui_print() { echo "$*" >> "$T/ui65"; }; MODPATH=$T/new KSU=true TT_GUARD_DIR=$G; . "$MOD/customize.sh" )
+check "安装时：KernelSU 提示点击模块" 'grep -q "点击本模块可打开界面" "$T/ui65"'
+export TT_GUARD_DIR=$TT_MODDIR
 
 pass=$(cat "$T/pass" 2>/dev/null | wc -l | tr -d " "); failn=$(cat "$T/fail" 2>/dev/null | wc -l | tr -d " ")
 echo "通过 $pass，失败 $failn"

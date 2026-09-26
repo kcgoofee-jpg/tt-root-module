@@ -64,6 +64,9 @@ status() {
     printf '"crashes":%s,' "$(ls -d "$CRASH_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ')"
     printf '"free":%s,"restoring":%s,"backing_up":%s,' "$(num "$(free_kb "$(bdir)")")" \
         "$([ -d "$GDIR/.restore.lock" ] && echo true || echo false)" "$([ -d "$GDIR/.backup.lock" ] && echo true || echo false)"
+    printf '"power":{"level":%s,"charging":%s,"saver":%s},"root":%s,"restore_interrupted":%s,' \
+        "$(num "$(battery_level)")" "$(charging && echo true || echo false)" "$(js "$(power_save)")" \
+        "$(js "$(root_manager)")" "$(js "$(state_get restore_interrupted)")"
     printf '"targets":['
     first=1
     for t in $TARGETS; do
@@ -104,6 +107,14 @@ item() { [ "$first" = 1 ] || printf ','; first=0; printf '{"name":%s,"ok":%s,"de
 selftest() {
     first=1; printf '['
     item "模块版本" 1 "$(sed -n 's/^version=//p' "$MODDIR/module.prop")"
+    rm_=$(root_manager)
+    case "$rm_" in
+        未识别) item "Root 管理器" 0 "未识别（KernelSU、KernelSU Next、SukiSU Ultra、APatch、Magisk 以外的管理器未经测试）" ;;
+        Magisk*) item "Root 管理器" 1 "$rm_。Magisk 不能直接打开模块界面，需另装 WebUI X 等应用；「执行」按钮需 Magisk 28 以上" ;;
+        *) item "Root 管理器" 1 "$rm_" ;;
+    esac
+    ps_=$(power_save)
+    if [ -n "$ps_" ]; then item "省电模式" 0 "已开启$ps_：后台的酒馆可能被结束，备份不受影响"; else item "省电模式" 1 "未开启"; fi
     if pm path "$PKG" >/dev/null 2>&1; then item "TauriTavern" 1 "已安装 $(tt_version)"; else item "TauriTavern" 0 "未安装"; fi
     if unlocked; then item "存储解锁" 1 "已解锁"; else item "存储解锁" 0 "开机后尚未解锁"; fi
     found=""; for t in $TARGETS; do t_present "$t" && found="$found、$(t_label "$t")"; done
@@ -139,7 +150,7 @@ diag() {
     [ -d "$CRASH_DIR" ] && cp -r "$CRASH_DIR" "$w/crash"
     selftest > "$w/selftest.json"
     sh "$MODDIR/action.sh" > "$w/status.txt" 2>&1
-    { getprop ro.build.fingerprint; getprop ro.build.version.release; /data/adb/ksu/bin/ksud -V 2>/dev/null; } > "$w/device.txt" 2>/dev/null
+    { getprop ro.build.fingerprint; getprop ro.build.version.release; root_manager; } > "$w/device.txt" 2>/dev/null
     list_backups > "$w/backups.txt"
     mkdir -p "$DIAG_DIR" || return 1
     out=$DIAG_DIR/tt-guard-diag-$(date +%Y%m%d-%H%M%S).tar.gz

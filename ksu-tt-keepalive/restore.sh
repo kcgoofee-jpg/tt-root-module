@@ -7,7 +7,8 @@
 # TT 必须先关掉（不会替你强制停止它）。
 # 同一时间只能有一个恢复（界面和电脑菜单同时点也不会互相干扰）；恢复期间不会自动重开 TT。
 # 退出码：0 成功，2 备份文件不对，3 TT 在运行，4 手机没解锁，5 恢复前的备份失败，6 解压或复制失败，
-#         7 另一个恢复正在进行，8 空间不够，9 备份文件校验不对（可能损坏）
+#         7 另一个恢复正在进行，8 空间不够，9 备份文件校验不对（可能损坏），10 电量低于 15% 且没在充电
+# 复制途中断电：开机后 service.sh 看到 restore.pending，发通知提示重新恢复（恢复前的数据已另存）
 MODDIR=${TT_MODDIR:-${0%/*}}
 . "$MODDIR/common.sh"
 
@@ -20,6 +21,7 @@ f=$(bdir)/$name
 [ -d "$root" ] || { echo "没有找到 $label 的数据目录，请先安装并打开一次"; exit 2; }
 t_running "$t" && { echo "$label 正在运行：请先在最近任务中关闭 $label"; exit 3; }
 unlocked || { echo "手机开机后还没解锁过，先解锁再恢复"; exit 4; }
+low_battery 15 && { echo "电量低于 15%，请先充电再恢复（恢复途中关机会导致数据不完整）"; exit 10; }
 
 lock=$GDIR/.restore.lock
 if ! mkdir "$lock" 2>/dev/null; then
@@ -63,6 +65,7 @@ owner=$(stat -c %u "$ud" 2>/dev/null); group=$(stat -c %g "$ud" 2>/dev/null)
 ctx=$(ls -Zd "$ud" 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^u:object_r:/) { print $i; exit } }')
 # 解压、另存花了点时间：覆盖前再确认一次 TT 没被打开
 t_running "$t" && { rm -rf "${stage:?}"; echo "$label 刚被打开：请先在最近任务中关闭 $label"; exit 3; }
+echo "$name|${safety##*/}" > "$GDIR/restore.pending"; sync
 copied=1
 for m in $(t_members "$t"); do
     if [ -d "$stage/$m" ]; then
@@ -75,8 +78,10 @@ for m in $(t_members "$t"); do
     [ -n "$owner" ] && chown -R "$owner:${group:-$owner}" "$root/$m" 2>/dev/null
     [ -n "$ctx" ] && command -v chcon >/dev/null 2>&1 && chcon -R "$ctx" "$root/$m" 2>/dev/null
 done
+sync; rm -f "$GDIR/restore.pending"
 if [ $copied = 1 ]; then
     rm -rf "${stage:?}"
+    state_set restore_interrupted ""
     log "从备份恢复了 $label 数据：$name"
     echo "已恢复：$name"
     prune_prerestore >/dev/null
