@@ -581,6 +581,13 @@ function alertsOf(d) {
     else a.push(["warn", "未检测到酒馆数据", "打开一次酒馆后自动检测"]);
   }
   if (d.restoring) a.push(["info", "正在恢复", "完成前请勿打开酒馆"]);
+  if (d.restore_interrupted) {
+    const [n, pre] = d.restore_interrupted.split("|");
+    a.push(["bad", "上次恢复未完成", `请重新恢复 ${n}；恢复前的数据已另存为 ${pre}`]);
+  }
+  const pw = d.power || {};
+  if (pw.level != null && pw.level < 15 && !pw.charging) a.push(["warn", `电量 ${pw.level}%`, "数据有变化时将提前备份；充电前不可恢复"]);
+  if (pw.saver) a.push(["info", `已开启${pw.saver}`, "后台的酒馆可能被结束，备份不受影响"]);
   if (d.backing_up) a.push(["info", "正在备份", "完成后自动刷新"]);
   if (!c.backup) a.push(["bad", "自动备份已关闭", "数据变化后不会自动备份", ["开启", "enable-backup"]]);
   else pres.forEach((x) => {
@@ -963,6 +970,7 @@ const RC = {
   7: ["warn", "另一个恢复正在进行", "请稍后重试"],
   8: ["bad", "存储空间不足", "请清理存储空间后重试"],
   9: ["bad", "备份校验失败", "文件可能已损坏，请选择其他备份"],
+  10: ["warn", "电量过低", "电量低于 15% 时不恢复，请连接充电器后重试"],
 };
 const RC_NODIR = ["bad", "未找到 {n} 的数据目录", "请先安装并打开一次 {n}"];
 /* 备份所属酒馆：{id, label, running} */
@@ -1032,7 +1040,7 @@ async function runRestore(name) {
   $("#rs-state").innerHTML = `<div class="note ${cls}">${icon}<div><b>${esc(title)}</b><span>${esc(hint)}</span>${extra ? "<br>" + extra : ""}</div></div>
     ${out.length ? `<details class="out"><summary>详细输出</summary><pre>${esc(out.join("\n"))}</pre></details>` : ""}`;
   $$("#sheet .steps").forEach((el) => el.remove());
-  const retry = rc === 3 || rc === 4 || rc === 7;
+  const retry = rc === 3 || rc === 4 || rc === 7 || rc === 10;
   $("#rs-btns").innerHTML = rc === 0 ? `<button class="btn primary" data-close>完成</button>`
     : `${retry ? `<button class="btn primary" id="rs-back">重新检测</button>` : ""}
        ${(rc === 2 && !nodir) || rc === 9 ? `<button class="btn" id="rs-pick">选择其他备份</button>` : ""}
@@ -1199,6 +1207,8 @@ function demo(args, raw) {
       Object.assign(s.backup, { sync_request: now - 4 * 60, mac_pulled: now - 2 * D, pc_host: "DESKTOP-7Q2K" });
     }
     if (scene === "alerts") {
+      s.power = { level: 12, charging: false, saver: "省电模式" };
+      s.restore_interrupted = stamp(now - 2 * D) + "|" + stamp(now - 3 * H, "prerestore");
       Object.assign(s.tt, { generating: true, frozen: "ColorOS" });
       Object.assign(s.keep, { whitelist: false, bucket: 30, network: "APP_BACKGROUND", temp: 47 });
       s.temps = { battery: 47, soc: 58, board: null };
