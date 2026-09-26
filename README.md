@@ -1,10 +1,22 @@
 # TT 守护（KernelSU 模块）
 
-为手机上的 TauriTavern（TT，`com.tauritavern.client`）提供数据保护和运行诊断：自动备份、校验、分层保留、同步到电脑（Mac / Windows）、一键恢复、异常通知；附带保活设置。离线运行，只作用于 TT 一个应用。
+为手机上的 SillyTavern 类应用提供数据保护和运行诊断：自动备份、校验、分层保留、同步到电脑（Mac / Windows）、一键恢复、异常通知；附带保活设置。离线运行。
+
+支持的酒馆（自动检测，未安装或没有数据的跳过）：
+
+| 酒馆 | 包名 | 数据位置 | 备份内容 |
+|---|---|---|---|
+| TauriTavern（TT） | `com.tauritavern.client` | `Android/data/…/data` | `default-user`、`extensions`、`_cm_archive`、`_css`、`_tauritavern` |
+| SillyDroid | `com.jm.sillydroid` | `/data/data/com.jm.sillydroid/files/android-tavern/data/server` | `config`、`data`、`extensions`、`plugins` |
+| SillyTavern（Termux） | `com.termux` | `~/SillyTavern`（Termux 主目录） | `config.yaml`、`data`、`plugins`、`public/scripts/extensions/third-party` |
+
+所有酒馆都不备份 `secrets.json`、`cookie-secret.txt`（密钥）、酒馆自带备份、缩略图、缓存、日志、`node_modules`。
 
 ## 定位
 
-TT 的后端在 App 进程内。2.3.0 起生成回复时自带前台服务，不会被 Android 冻结；空闲时被冻结属于正常省电，不影响数据。与 Termux 中常驻的 SillyTavern 服务不同，TT 不依赖常驻保活。因此本模块以**数据安全和诊断**为主，保活设置作为补充。
+TT 的后端在 App 进程内。2.3.0 起生成回复时自带前台服务，不会被 Android 冻结；空闲时被冻结属于正常省电，不影响数据。因此对 TT，本模块以**数据安全和诊断**为主，保活设置作为补充。
+
+SillyDroid 和 Termux 中的 SillyTavern 是常驻的 node 服务，需要保活：检测到它们时，模块同样设置电池优化白名单和允许后台运行（记录原值，卸载时还原）。实测 Termux 在后台下载时被冻结，连接中断。
 
 实测（OnePlus PLC110 / Android 16 / KernelSU 3.3.0）：一天内 TT 的 8 次重启均为 `am force-stop`（电脑端工具触发），没有系统查杀。
 
@@ -17,7 +29,7 @@ TT 的后端在 App 进程内。2.3.0 起生成回复时自带前台服务，不
 | 分层保留 | 最新一份和近 2 天全部保留；之后每天 / 每周 / 每月各留最新一份（默认 7 天 / 4 周 / 6 个月）。系统时间异常跳变时不删除。恢复前自动保存的备份单独保留最新 3 份。每份约 45 MB，总占用约 1 GB。 |
 | 存储位置 | 默认 `/data/adb/tt-backups`（仅 root 可读）；可切换到「内部存储/Documents/TauriTavern-backup」。卸载模块时私密备份移至共享位置。 |
 | 同步到电脑 | 电脑端定时任务每 30 分钟从手机拉取新备份并核对 sha256，电脑上按 14 天 / 8 周 / 24 个月保留。手机端超过 3 天未同步时提醒。 |
-| 恢复 | 界面或电脑菜单中选择备份。校验 sha256、检查空间、加锁，恢复前自动保存当前数据；备份之后新建的内容不删除；API 密钥不受影响。TT 运行时拒绝恢复（不会强制停止 TT）。 |
+| 恢复 | 界面或电脑菜单中选择备份，按文件名自动识别酒馆。校验 sha256、检查空间、加锁，恢复前自动保存当前数据；备份之后新建的内容不删除；密钥不受影响；属主和 SELinux 标签按原目录还原（含 App 私有目录的分类号）。酒馆运行时拒绝恢复（不会强制停止）。 |
 | 异常通知 | 生成中被冻结、进程退出、网络受限、电池过热；备份连续失败、超过 2 天未备份、存储空间不足；TT 崩溃（同时保存崩溃记录）。 |
 | 诊断 | 冻结 / 解冻记录、退出原因（ApplicationExitInfo）、每日统计、温度（电池 / 处理器 / 主板）、TT 与 WebView 版本变化、自检、导出诊断包。 |
 | 保活设置 | 电池优化白名单、允许后台运行、待机分组不低于「活跃」；每 10 分钟核对；卸载时还原为安装前的值。 |
@@ -39,6 +51,10 @@ KernelSU 管理器 → 模块 → 点击「TT 守护」打开。首屏显示运�
 
 ## 电脑端同步
 
+电脑上安装一次后，手机连上电脑（数据线或无线调试）即自动同步；也可以在手机界面中点击「立即同步到电脑」，电脑在一分钟内完成。之后无需在电脑上操作。
+
+一次性安装：在模块仓库的 `pc` 文件夹中双击 `安装自动备份（Mac）.command` 或 `安装自动备份（Windows）.cmd`。
+
 前提：手机已开启 USB 调试或无线调试，KernelSU 中已授予 Shell（`com.android.shell`）root 权限。注意：授权后，任何被手机信任的电脑都可以通过 adb 获得 root。
 
 **Mac**
@@ -47,7 +63,7 @@ KernelSU 管理器 → 模块 → 点击「TT 守护」打开。首屏显示运�
 zsh pc/install-mac.sh
 ```
 
-每 30 分钟运行一次 `pc/pull-backups.sh`（launchd，登录时也运行）。备份保存在 `tavern/phone-backups/tt`，可用 `TT_PHONE_BACKUP_DIR` 修改。卸载：`zsh pc/install-mac.sh --uninstall`。
+每分钟运行一次 `pc/pull-backups.sh`（launchd，登录时也运行）；未连接手机或没有新内容时立即退出。备份保存在 `tavern/phone-backups/tt`，可用 `TT_PHONE_BACKUP_DIR` 修改。卸载：`zsh pc/install-mac.sh --uninstall`。
 
 **Windows**（PowerShell 5.1，Windows 10 / 11 自带，不需要管理员权限）
 
@@ -55,13 +71,17 @@ zsh pc/install-mac.sh
 powershell -ExecutionPolicy Bypass -File pc\install-windows.ps1
 ```
 
-每 30 分钟运行一次 `pc\pull-backups.ps1`（任务计划，登录时也运行）。备份保存在「文档\TT-phone-backups」，可用 `-Dest` 修改。adb 查找顺序：`-Adb` 参数、`tavern\tools\platform-tools\adb.exe`、PATH。卸载：加 `-Uninstall`。
+每分钟运行一次 `pc\pull-backups.ps1`（任务计划，登录时也运行，`conhost --headless` 启动不显示窗口）；未连接手机或没有新内容时立即退出。备份保存在「文档\TT-phone-backups」，可用 `-Dest` 修改。adb 查找顺序：`-Adb` 参数、`tavern\tools\platform-tools\adb.exe`、PATH。卸载：加 `-Uninstall`。
 
 两个平台共用同一套逻辑：只拉取电脑上没有的备份，经手机中转目录 `adb pull`（二进制安全），核对 sha256 后才保存；保留规则由手机端计算（`ui.sh plan`）；全部成功后通知手机「已同步」；连续 3 天未同步时发送系统通知；运行记录在备份目录的 `pull.log`。
 
+## 数据目录
+
+模块的日志、状态、统计、设置、崩溃记录保存在 `/data/adb/tt-guard`（仅 root 可读），不在模块目录中，更新模块时不会丢失；卸载时删除。在 KernelSU 管理器中禁用模块后，模块停止一切操作，直到重新启用。
+
 ## 设置
 
-保存在模块目录的 `config.txt`，可在界面中修改。值必须是数字；无效的值按默认值处理，并在自检中列出。
+保存在 `/data/adb/tt-guard/config.txt`，可在界面中修改。值必须是数字；无效的值按默认值处理，并在自检中列出。
 
 | 键 | 默认 | 说明 |
 |---|---|---|

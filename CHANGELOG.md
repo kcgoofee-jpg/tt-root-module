@@ -16,7 +16,11 @@
 - 省电：TT 空闲冻结时不调用 `dumpsys`，检查间隔降为 60 秒。
 - 并发：状态和统计文件加锁写入。
 - 通知与界面文案统一为标准化表述。
-- 测试：模块 260 项（dash / sh / ksh，并在手机 mksh / busybox 上运行），电脑端 26 项。
+- 多酒馆：自动检测并备份 SillyDroid（`com.jm.sillydroid`）和 Termux 中的 SillyTavern，文件名前缀 `sillydroid-`、`termux-st-`，分层保留按酒馆分开；恢复时按原目录还原属主和 SELinux 标签（含 App 私有目录的分类号）；检测到时对它们设置保活，卸载时还原。
+- 持久数据移到 `/data/adb/tt-guard`（参照 box_for_root 等模块），更新模块时不丢失；旧版本数据自动迁移。
+- 在 KernelSU 管理器中禁用模块后停止一切操作。
+- 电脑端：双击安装（`pc/安装自动备份（Mac）.command`、`pc/安装自动备份（Windows）.cmd`）；每分钟检查，手机连上即同步；手机界面可「立即同步到电脑」，并显示最近同步的电脑名；Windows 用 UTC 时间戳、`conhost --headless` 启动；launchd 设置 PATH（Homebrew 的 adb）；`.gitattributes` 固定换行符。
+- 测试：模块 290 项（dash / sh / ksh，并在手机 mksh / busybox 上运行），电脑端 26 项；在手机上用 SillyDroid 真实数据演练备份和恢复（属主、标签全部一致）。
 
 ## 1.5（2026-09-26）
 

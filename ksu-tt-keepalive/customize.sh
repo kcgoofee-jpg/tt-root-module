@@ -18,6 +18,6 @@ if [ -d "$OLD" ] && [ ! -f "$G/prior.txt" ]; then
         echo "RUN_ANY_IN_BACKGROUND=default"
     } > "$G/prior.txt"
 fi
-ui_print "- TT 守护：仅作用于 com.tauritavern.client，重启后生效"
+ui_print "- TT 守护：自动检测 TauriTavern、SillyDroid、Termux 版 SillyTavern，重启后生效"
 ui_print "- 备份位置：/data/adb/tt-backups（私密存储，不含 API 密钥）"
 ui_print "- 在 KernelSU 模块列表中点击本模块可打开界面"

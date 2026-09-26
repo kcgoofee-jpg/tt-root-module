@@ -21,11 +21,12 @@ MODDIR=${TT_MODDIR:-${0%/*}}
 PULL_DIR=${PULL_DIR:-/data/local/tmp/tt-pull}   # 给电脑 adb pull 用的临时副本（shell 身份能读）
 
 # JSON 字符串：转义反斜杠和引号，去掉控制字符
-js() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037')"; }
+# 不用 tr 的八进制范围（'\000-\037'）：手机自带的 tr 会把范围里的「-」当成字符删掉，用字符类 [:cntrl:]
+js() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '[:cntrl:]')"; }
 # 标准输入的每一行 → JSON 字符串数组
 jlines() {
-    tr -d '\000-\010\013\014\016-\037' | awk 'BEGIN { printf "[" }
-         { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, " "); gsub(/\r/, ""); printf "%s\"%s\"", (NR > 1 ? "," : ""), $0 }
+    awk 'BEGIN { printf "[" }
+         { gsub(/\t/, " "); gsub(/[[:cntrl:]]/, ""); gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); printf "%s\"%s\"", (NR > 1 ? "," : ""), $0 }
          END { printf "]" }'
 }
 num() { case "$1" in ''|*[!0-9-]*) echo null ;; *) echo "$1" ;; esac; }

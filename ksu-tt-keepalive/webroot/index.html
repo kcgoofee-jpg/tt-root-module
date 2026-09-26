@@ -95,6 +95,8 @@ svg.i { width: 20px; height: 20px; flex: none; }
 .metric.ok .s { color: var(--ok); }
 .metric.warn .s { color: var(--warn); }
 .metric.bad .s { color: var(--danger); }
+.metric.info .s { color: var(--info); }
+.metric .s span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .hero .btn.primary { width: 100%; margin-top: 14px; }
 
 /* ---- 1.5 按钮 ---- */
@@ -148,6 +150,18 @@ button.row { width: 100%; border: 0; background: none; text-align: left; font: i
 .more { width: 100%; min-height: 48px; border: 0; border-top: 1px solid var(--line); background: none; color: var(--accent); font-weight: 600; }
 .summary { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 12px 16px; background: var(--surface-2); font-size: 13px; color: var(--muted); }
 .summary b { color: var(--text); font-weight: 600; }
+.chip.tg { background: transparent; border: 1px solid var(--line); line-height: 18px; font-weight: 500; }
+.row.dim .title { color: var(--muted); }
+.row .btn.sm { flex: none; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 6px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.filters button { flex: none; min-height: 34px; padding: 0 11px; border-radius: 99px; border: 1px solid var(--line); background: transparent; font-size: 13.5px; font-weight: 600; color: var(--muted); position: relative; }
+.filters button::after { content: ""; position: absolute; inset: -5px -3px; }
+.filters button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+.card > .row + details { border-top: 1px solid var(--line); }
+.setup .steps { padding: 4px 16px 14px; margin: 0; }
+.setup .steps li { color: var(--text); }
+.setup .steps b { font-weight: 600; overflow-wrap: anywhere; }
+.setup .steps .n { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 650; display: grid; place-items: center; margin-top: 1px; }
 
 /* ---- 1.8 折叠区 ---- */
 details > summary { list-style: none; cursor: pointer; }
@@ -297,7 +311,7 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
     </div>
     <div class="ttl">
       <h1>TT 守护</h1>
-      <p id="sub" class="num">TauriTavern 数据备份与诊断</p>
+      <p id="sub" class="num">酒馆数据备份与诊断</p>
     </div>
     <button class="iconbtn" id="refresh" aria-label="刷新">
       <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.35-5.65L20 8.7"/><path d="M20 4v4.7h-4.7"/></svg>
@@ -307,7 +321,9 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
   <div class="demo" id="demo" hidden>
     <b>演示数据 · 未连接 KernelSU</b>
     <select id="demo-scene" aria-label="演示场景">
-      <option value="normal">场景：正常</option>
+      <option value="normal">场景：三个酒馆</option>
+      <option value="ttonly">场景：仅 TauriTavern</option>
+      <option value="syncing">场景：等待电脑同步</option>
       <option value="alerts">场景：多项提醒</option>
       <option value="empty">场景：暂无备份</option>
       <option value="busy">场景：正在备份</option>
@@ -315,7 +331,7 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
     </select>
     <select id="demo-rc" aria-label="演示恢复结果">
       <option value="auto">恢复结果：按实际</option>
-      <option value="0">rc 0 成功</option><option value="2">rc 2 文件不对</option><option value="3">rc 3 TT 运行中</option>
+      <option value="0">rc 0 成功</option><option value="2">rc 2 文件不对</option><option value="2d">rc 2 无数据目录</option><option value="3">rc 3 运行中</option>
       <option value="4">rc 4 未解锁</option><option value="5">rc 5 恢复前备份失败</option><option value="6">rc 6 解压/复制失败</option>
       <option value="7">rc 7 另一个恢复</option><option value="8">rc 8 空间不够</option><option value="9">rc 9 校验失败</option>
     </select>
@@ -333,13 +349,32 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
   </section>
   <div class="alerts" id="alerts" role="list" aria-label="提醒"></div>
 
+  <!-- 酒馆（自动检测；未安装的不显示） -->
+  <section class="section" aria-labelledby="h-targets">
+    <div class="sh"><h2 id="h-targets">酒馆</h2></div>
+    <div class="card" id="targets"><div class="skrow"><i class="sk"></i><i class="sk"></i></div></div>
+  </section>
+
   <!-- 备份 -->
   <section class="section" aria-labelledby="h-backup">
     <div class="sh"><h2 id="h-backup">备份</h2><button class="btn sm" id="btn-restore" disabled></button></div>
     <div class="card">
       <div class="summary" id="backup-summary"><span class="sk">读取中……………</span></div>
+      <div class="filters" id="filters" role="group" aria-label="按酒馆筛选" hidden></div>
       <div id="backups"><div class="skrow"><i class="sk"></i><i class="sk"></i></div><div class="skrow"><i class="sk"></i><i class="sk"></i></div></div>
+    </div>
+    <div class="card" id="sync-card">
+      <button class="row" id="btn-sync"></button>
       <button class="row" id="btn-pulled"></button>
+      <details class="setup">
+        <summary class="row"><span class="lead-ic"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/><path d="M12 7.6v.1"/></svg></span><div class="main"><div class="title">电脑端设置</div><div class="sub">首次使用前在电脑上安装一次</div></div><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></summary>
+        <ol class="steps">
+          <li><span class="n">1</span><span>在模块仓库的 pc 文件夹中双击<br><b>安装自动备份（Mac）.command</b> 或<br><b>安装自动备份（Windows）.cmd</b></span></li>
+          <li><span class="n">2</span><span>手机开启 USB 调试，用数据线连接电脑</span></li>
+          <li><span class="n">3</span><span>在 KernelSU 中授予 Shell root 权限</span></li>
+        </ol>
+        <p class="sub-h" style="padding-top:0;font-weight:400">电脑每分钟检查一次，连接后自动同步</p>
+      </details>
     </div>
   </section>
 
@@ -486,6 +521,10 @@ function whenText(name) {
 const isPre = (it) => it.tier === "pre" || /-prerestore\.tar\.gz$/.test(it.name);
 const tierOf = (it) => isPre(it) ? "pre" : it.tier;
 const shownPath = (p) => String(p || "").replace(/^(\/data\/media\/0|\/storage\/emulated\/0|\/sdcard)\//, "内部存储/");
+/* 酒馆：id → 名称；短名用于标签和筛选 */
+const TGT = { tt: "TauriTavern", sillydroid: "SillyDroid", termux: "SillyTavern（Termux）" };
+const TGT_SHORT = { tt: "TauriTavern", sillydroid: "SillyDroid", termux: "Termux" };
+const targetOf = (it) => it.target || (/^sillydroid-/.test(it.name) ? "sillydroid" : /^termux-st-/.test(it.name) ? "termux" : "tt");
 
 /* ---- 3.4 状态推导 ---- */
 let S = null;               // 最近一次 status
@@ -494,6 +533,32 @@ let selftest = null;        // 最近一次自检结果
 let diagFile = null;        // 最近一次导出的诊断包
 let acting = 0;             // 进行中的操作数（期间不自动刷新）
 
+let filter = "all";          // 备份列表筛选（all 或酒馆 id）
+try { filter = localStorage.getItem("tt-guard.filter") || "all"; } catch {}
+
+/* 各酒馆；旧版本没有 targets 时按 TauriTavern 一个处理 */
+function targetsOf(d) {
+  const b = d.backup;
+  const list = Array.isArray(d.targets) && d.targets.length ? d.targets
+    : [{ id: "tt", label: TGT.tt, installed: d.tt.installed, present: d.tt.installed, running: d.tt.running, last: b.last, check: b.check, fails: b.fails, count: b.items.length }];
+  return list.map((t) => {
+    const first = b.items.find((it) => targetOf(it) === t.id);
+    const lt = Math.max((first && nameTime(first.name)) || 0, t.last || 0) || null;
+    const since = Math.max(lt || 0, t.check || 0) || null;
+    const count = t.count != null ? t.count : b.items.filter((it) => targetOf(it) === t.id).length;
+    return { ...t, label: t.label || TGT[t.id] || t.id, short: TGT_SHORT[t.id] || t.label || t.id, lt, since, count, top: first || null };
+  });
+}
+const presentOf = (d) => targetsOf(d).filter((t) => t.present);
+/* 某酒馆的备份问题：[级别, 说明] 或 null */
+function targetIssue(d, t) {
+  const now = d.now;
+  if (t.fails >= 3) return ["bad", `连续失败 ${t.fails} 次`];
+  if (!t.count) return ["warn", "暂无备份"];
+  const since = t.since || d.backup.watch_since;
+  if (since && now - since > 172800) return ["bad", `${days(now - since)} 天无成功备份`];
+  return null;
+}
 function latestBackupTime(b) {
   const t = b.items.length ? nameTime(b.items[0].name) : null;
   return Math.max(t || 0, b.last || 0) || null;
@@ -510,18 +575,24 @@ function netLimited(d) { return !!(d.tt.running && d.keep.network && d.keep.netw
 /* 提醒：[级别 bad|warn|info, 标题, 说明, 可选操作] */
 function alertsOf(d) {
   const a = [], now = d.now, c = d.config, b = d.backup, t = d.tt;
-  if (!t.installed) a.push(["bad", "未安装 TauriTavern", "安装后自动开始工作"]);
-  if (d.restoring) a.push(["info", "正在恢复", "完成前请勿打开 TauriTavern"]);
+  const all = targetsOf(d), pres = all.filter((x) => x.present);
+  if (!pres.length) {
+    if (!all.some((x) => x.installed)) a.push(["bad", "未安装 TauriTavern", "安装后自动开始工作"]);
+    else a.push(["warn", "未检测到酒馆数据", "打开一次酒馆后自动检测"]);
+  }
+  if (d.restoring) a.push(["info", "正在恢复", "完成前请勿打开酒馆"]);
   if (d.backing_up) a.push(["info", "正在备份", "完成后自动刷新"]);
   if (!c.backup) a.push(["bad", "自动备份已关闭", "数据变化后不会自动备份", ["开启", "enable-backup"]]);
-  else if (b.fails >= 3) a.push(["bad", `备份连续失败 ${b.fails} 次`, "请检查存储空间后重试"]);
-  else if (!b.items.length) { if (t.installed) a.push(["warn", "暂无备份", "建议立即备份一次"]); }
-  else {
-    const since = Math.max(latestBackupTime(b) || 0, b.check || 0) || b.watch_since;
-    if (since && now - since > 172800) a.push(["bad", `${days(now - since)} 天无成功备份`, "开机后需解锁一次"]);
-  }
+  else pres.forEach((x) => {
+    const is = targetIssue(d, x); if (!is) return;
+    const who = pres.length > 1 ? `${x.label}：` : "";
+    if (x.fails >= 3) a.push(["bad", `${who}备份${is[1]}`, "请检查存储空间后重试"]);
+    else if (!x.count) a.push(["warn", `${who}暂无备份`, "建议立即备份一次"]);
+    else a.push(["bad", `${who}${is[1]}`, "开机后需解锁一次"]);
+  });
   const od = syncOverdue(d);
-  if (od) a.push(["warn", b.mac_pulled ? `${od} 天未同步到电脑` : "尚未同步到电脑", "备份仅存于本机", ["标记已同步", "mark-pulled"]]);
+  if (od) a.push(["warn", b.mac_pulled ? `${od} 天未同步到电脑` : "尚未同步到电脑", "备份仅存于本机", ["立即同步", "sync"]]);
+  if (b.sync_request && now - b.sync_request > 600) a.push(["info", "同步请求等待中", "请连接电脑并确认已完成电脑端设置"]);
   if (t.installed && !d.keep.whitelist) a.push(["warn", "不在电池优化白名单", "模块将自动重新加入"]);
   if (netLimited(d)) a.push(["warn", "后台网络受限", `限制类型：${d.keep.network}`]);
   if (hot(d)) a.push(["warn", `电池温度 ${d.keep.temp}°C`, "建议暂停使用并停止充电"]);
@@ -568,25 +639,40 @@ function render(d) {
   /* 首屏状态 */
   $("#hero").className = "hero " + worst;
   const v = $("#verdict"); v.classList.remove("sk");
-  v.textContent = n ? `${n} 项提醒` : d.restoring ? "正在恢复" : d.backing_up ? "正在备份" : !t.installed ? "未安装 TauriTavern" : "运行正常";
+  const pres = presentOf(d);
+  v.textContent = n ? `${n} 项提醒` : d.restoring ? "正在恢复" : d.backing_up ? "正在备份" : !t.installed && !pres.length ? "未安装 TauriTavern" : "运行正常";
 
-  const lt = latestBackupTime(b), top = b.items[0];
-  const fresh = lt && now - Math.max(lt, b.check || 0) <= 172800;
-  metric("#m-backup", lt ? ago(lt, now) : "暂无",
-    !top ? ["warn", IC.info, "暂无备份"] : top.verified ? [fresh ? "ok" : "warn", IC.check, "已校验"] : ["warn", IC.warn, "未校验"]);
+  /* 最近备份：多个酒馆时取最旧的一个判断 */
+  if (!pres.length) metric("#m-backup", "暂无", ["warn", IC.info, "未检测到数据"]);
+  else if (pres.length === 1) {
+    const x = pres[0], top = x.top, is = targetIssue(d, x);
+    metric("#m-backup", x.lt ? ago(x.lt, now) : "暂无",
+      !top ? ["warn", IC.info, "暂无备份"] : x.fails >= 3 ? ["bad", IC.warn, "备份失败"] : top.verified ? [is ? "warn" : "ok", IC.check, "已校验"] : ["warn", IC.warn, "未校验"]);
+  } else {
+    const oldest = pres.filter((x) => x.lt).sort((p, q) => p.lt - q.lt)[0];
+    const iss = pres.map((x) => [x, targetIssue(d, x)]).filter((p) => p[1]);
+    const worstIs = iss.find((p) => p[1][0] === "bad") || iss[0];
+    metric("#m-backup", oldest ? ago(oldest.lt, now) : "暂无",
+      worstIs ? [worstIs[1][0], IC.warn, worstIs[0].short] : ["ok", IC.check, `${pres.length} 个酒馆`]);
+  }
+  /* 电脑同步：时间 + 电脑名；有待处理的请求时显示等待 */
   const od = syncOverdue(d);
   metric("#m-sync", b.mac_pulled ? ago(b.mac_pulled, now) : "未同步",
-    b.mac_pulled ? (od ? ["warn", IC.warn, "需同步"] : ["ok", IC.check, "已同步"]) : [b.items.length && c.mac_alert_days ? "warn" : "", "", "仅存于本机"]);
+    b.sync_request ? ["info", "", "等待电脑连接"]
+    : b.mac_pulled ? (od ? ["warn", IC.warn, b.pc_host || "需同步"] : ["ok", IC.check, b.pc_host || "已同步"])
+    : [b.items.length && c.mac_alert_days ? "warn" : "", "", "仅存于本机"]);
+  $("#m-sync").title = b.pc_host && b.mac_pulled ? `${b.pc_host} · ${ago(b.mac_pulled, now)}` : "";
   const ttv = !t.installed ? "未安装" : !t.running ? "未运行" : t.frozen ? "已冻结" : t.generating ? "生成中" : "运行中";
-  const tts = !t.installed ? ["bad", "", "—"] : t.running && t.frozen ? (t.generating ? ["warn", IC.warn, "生成中"] : ["", "", "空闲"]) : ["", "", t.version ? `v${t.version}` : "\u00a0"];
+  const tts = !t.installed ? [pres.length ? "" : "bad", "", "—"] : t.running && t.frozen ? (t.generating ? ["warn", IC.warn, "生成中"] : ["", "", "空闲"]) : ["", "", t.version ? `v${t.version}` : " "];
   metric("#m-tt", ttv, tts);
 
   /* 立即备份 / 从备份恢复 按钮（进行中不可用） */
   const bb = $("#btn-backup");
   if (!bb.hasAttribute("aria-busy")) {
-    bb.disabled = !!(d.backing_up || d.restoring || !t.installed);
-    bb.innerHTML = d.backing_up ? '<span class="ring" aria-hidden="true"></span>正在备份' : `${IC.backup}立即备份`;
+    bb.disabled = !!(d.backing_up || d.restoring || !pres.length);
+    bb.innerHTML = d.backing_up ? '<span class="ring" aria-hidden="true"></span>正在备份' : `${IC.backup}${pres.length > 1 ? `立即备份全部（${pres.length} 个酒馆）` : "立即备份"}`;
   }
+
   const rb = $("#btn-restore");
   rb.innerHTML = `${IC.restore}从备份恢复`; rb.disabled = !b.items.length || !!d.restoring;
 
@@ -594,6 +680,7 @@ function render(d) {
   $("#alerts").innerHTML = al.map(([k, tt, s, act]) =>
     `<div class="alert ${k}" role="listitem">${k === "info" ? IC.info : IC.warn}<div class="tx"><b>${esc(tt)}</b><span>${esc(s)}</span></div>${act ? `<button class="act" data-act="${act[1]}">${esc(act[0])}</button>` : ""}</div>`).join("");
 
+  renderTargets(d);
   renderBackups(d);
   renderKeep(d);
   renderDiag(d);
@@ -607,6 +694,22 @@ function metric(sel, v, [cls, icon, s]) {
   $(".s", el).innerHTML = `${icon || ""}<span>${esc(s || "\u00a0")}</span>`;
 }
 
+/* 酒馆：已安装的每个一行；未检测到数据的以次要样式显示 */
+function renderTargets(d) {
+  const now = d.now, list = targetsOf(d).filter((x) => x.installed || x.present);
+  const block = !!(d.backing_up || d.restoring);
+  $("#targets").innerHTML = list.length ? list.map((x) => {
+    if (!x.present) return `<div class="row dim"><div class="main"><div class="title">${esc(x.label)}</div><div class="sub">未检测到数据 · 打开一次后自动检测</div></div></div>`;
+    const is = targetIssue(d, x);
+    const run = x.id === "tt" && d.tt.running && d.tt.generating ? "生成中" : x.running ? "运行中" : "未运行";
+    const bk = x.lt ? `${ago(x.lt, now)}备份 · ${x.count} 份` : "暂无备份";
+    const st = is && x.count ? ` · <span class="${is[0] === "bad" ? "badc" : "warnc"}">${esc(is[1])}</span>` : "";
+    return `<div class="row"><div class="main"><div class="title">${esc(x.label)}</div>
+      <div class="sub num">${run} · ${esc(bk)}${st}</div></div>
+      <button class="btn sm" data-bk-target="${esc(x.id)}" aria-label="立即备份 ${esc(x.label)}" ${block ? "disabled" : ""}>立即备份</button></div>`;
+  }).join("") : `<div class="empty">未检测到酒馆</div>`;
+}
+
 function renderBackups(d) {
   const b = d.backup, c = d.config, items = b.items, now = d.now;
   const total = d.space && d.space.backups != null ? d.space.backups : items.reduce((x, it) => x + (it.kb || 0), 0);
@@ -616,18 +719,40 @@ function renderBackups(d) {
     `<span><b>${c.backup_private ? "私密存储" : "共享存储"}</b></span>`,
     `<span>剩余 <b class="num">${kb(d.free)}</b></span>`,
   ].join("");
-  const show = showAll ? items : items.slice(0, 5);
-  $("#backups").innerHTML = items.length
-    ? show.map((it) => {
-        const tr = tierOf(it);
-        return `<button class="row" data-restore="${esc(it.name)}" aria-label="恢复 ${esc(whenText(it.name))} 的备份">
-          <div class="main"><div class="title num"><span class="chip ${TIER_CLS[tr] || ""}">${esc(TIER[tr] || tr)}</span>${esc(whenText(it.name))}</div>
-          <div class="sub num">${kb(it.kb)} · ${it.verified ? '<span class="okc">已校验</span>' : '<span class="warnc">未校验</span>'}</div></div>${IC.chev}</button>`;
-      }).join("") + (items.length > 5 ? `<button class="more" id="more">${showAll ? "收起" : `显示全部 ${items.length} 份`}</button>` : "")
+
+  /* 筛选：有两个及以上酒馆的备份时显示 */
+  const ids = Object.keys(TGT).filter((id) => items.some((it) => targetOf(it) === id));
+  const multi = ids.length > 1;
+  const f = multi && ids.includes(filter) ? filter : "all";
+  $("#filters").hidden = !multi;
+  $("#filters").innerHTML = multi ? [["all", "全部"], ...ids.map((id) => [id, TGT_SHORT[id]])]
+    .map(([id, l]) => `<button data-filter="${id}" aria-pressed="${f === id}">${esc(l)}</button>`).join("") : "";
+
+  const list = f === "all" ? items : items.filter((it) => targetOf(it) === f);
+  const show = showAll ? list : list.slice(0, 5);
+  $("#backups").innerHTML = list.length
+    ? show.map((it) => backupRow(it, "data-restore", multi && f === "all")).join("")
+      + (list.length > 5 ? `<button class="more" id="more">${showAll ? "收起" : `显示全部 ${list.length} 份`}</button>` : "")
     : `<div class="empty">暂无备份</div>`;
+
+  /* 电脑同步 */
+  const pend = b.sync_request, host = b.pc_host ? `${b.pc_host} · ` : "";
+  const sy = $("#btn-sync");
+  if (!sy.hasAttribute("aria-busy")) {
+    sy.innerHTML = `<span class="lead-ic">${IC.laptop}</span><div class="main"><div class="title">立即同步到电脑</div><div class="sub num">${
+      pend ? `<span style="color:var(--info)">等待电脑连接</span> · ${esc(ago(pend, now))}请求` : b.mac_pulled ? `上次同步：${esc(host + ago(b.mac_pulled, now))}` : "尚未同步到电脑"}</div></div>${IC.chev}`;
+    sy.disabled = !items.length && !presentOf(d).length;
+  }
   const pulled = $("#btn-pulled");
-  pulled.innerHTML = `<span class="lead-ic">${IC.laptop}</span><div class="main"><div class="title">标记为已同步</div><div class="sub">${b.mac_pulled ? `上次同步：${esc(ago(b.mac_pulled, now))}` : "尚未同步到电脑"}</div></div>${IC.chev}`;
+  pulled.innerHTML = `<span class="lead-ic">${IC.check}</span><div class="main"><div class="title">标记为已同步</div><div class="sub">已手动复制备份到电脑时使用</div></div>${IC.chev}`;
   pulled.hidden = !items.length;
+}
+/* 一行备份；withTarget：显示酒馆标签 */
+function backupRow(it, attr, withTarget) {
+  const tr = tierOf(it), tg = targetOf(it);
+  return `<button class="row" ${attr}="${esc(it.name)}" aria-label="恢复 ${esc(TGT[tg] || "")} ${esc(whenText(it.name))} 的备份">
+    <div class="main"><div class="title num"><span class="chip ${TIER_CLS[tr] || ""}">${esc(TIER[tr] || tr)}</span>${esc(whenText(it.name))}</div>
+    <div class="sub num">${withTarget ? `<span class="chip tg">${esc(TGT_SHORT[tg] || tg)}</span>` : ""}${kb(it.kb)} · ${it.verified ? '<span class="okc">已校验</span>' : '<span class="warnc">未校验</span>'}</div></div>${IC.chev}</button>`;
 }
 
 function renderKeep(d) {
@@ -658,7 +783,8 @@ function renderDiag(d) {
 
   const tt = d.tt;
   $("#env").innerHTML = [["模块版本", `v${d.version}`], ["TauriTavern", tt.installed ? (tt.version ? `v${tt.version}` : "已安装") : "未安装"],
-    ["进程", tt.running ? (tt.pids || "运行中") : "未运行"], ["WebView", tt.webview || "—"], ["备份目录", shownPath(d.backup.dir) || "—"]]
+    ["进程", tt.running ? (tt.pids || "运行中") : "未运行"], ["WebView", tt.webview || "—"],
+    ["酒馆数据", presentOf(d).map((x) => x.label).join("、") || "未检测到"], ["备份目录", shownPath(d.backup.dir) || "—"]]
     .map(([k, v]) => `<dt>${k}</dt><dd class="num">${esc(v)}</dd>`).join("");
 
   renderSelftest();
@@ -776,18 +902,41 @@ function confirmShared() {
   $("#sh-go").onclick = () => { closeSheet(); setKey("backup_private", 0); };
 }
 
-/* ---- 3.7 立即备份 ---- */
-async function doBackup() {
-  const done = busy($("#btn-backup"), "正在备份"); acting++;
-  try {
-    const r = await ui("backup");
-    if (r && r.ok) toast(`备份完成（${kb(r.kb)}）${r.dropped ? `，已清理 ${r.dropped} 份旧备份` : ""}`);
-    else toast("备份失败：" + ((r && r.msg) || "未知错误"));
-  } catch (e) { toast("备份失败：" + e.message); }
+/* ---- 3.7 立即备份（全部，或某个酒馆） ---- */
+function backupText(r) {
+  const n = (r.names || []).length || 1;
+  let s = `备份完成（${n > 1 ? `${n} 个酒馆，` : ""}${kb(r.kb)}）`;
+  if (r.dropped) s += `，已清理 ${r.dropped} 份旧备份`;
+  if (r.skipped) s += `；${r.skipped} 正在生成，已跳过`;
+  if (r.failed) s += `；${r.failed} 备份失败`;
+  return s;
+}
+async function runBackup(id) {
+  const r = await ui(id ? `backup ${id}` : "backup");
+  if (!r || !r.ok) throw new Error((r && r.msg) || "未知错误");
+  return r;
+}
+async function doBackup(ev, id) {
+  const btn = id ? ev.currentTarget : $("#btn-backup");
+  const done = busy(btn, "正在备份"); acting++;
+  try { toast(backupText(await runBackup(id))); }
+  catch (e) { toast("备份失败：" + e.message); }
   acting--; done(); await load(true);
 }
 
-/* ---- 3.8 标记为已同步 ---- */
+/* ---- 3.8 电脑同步：先备份，再请求电脑同步；标记为已同步 ---- */
+async function doSync() {
+  const btn = $("#btn-sync"), done = busy(btn, "正在准备同步"); acting++;
+  let bkErr = "";
+  try {
+    if (S && presentOf(S).length) { try { await runBackup(); } catch (e) { bkErr = e.message; } }
+    if (bkErr && !(S && S.backup.items.length)) throw new Error(bkErr);
+    const r = await ui("request-sync");
+    if (!r || !r.ok) throw new Error((r && r.msg) || "未知错误");
+    toast(bkErr ? `已请求同步（未能先备份：${bkErr}）` : "已请求同步，电脑连接后自动完成");
+  } catch (e) { toast("请求同步失败：" + e.message); }
+  acting--; done(); await load(true);
+}
 function confirmPulled() {
   openSheet(`<h3 id="sheet-title">标记为已同步？</h3>
     <p class="lead">确认备份已复制到电脑。将清除「未同步到电脑」提醒。</p>
@@ -802,11 +951,12 @@ function confirmPulled() {
   };
 }
 
-/* ---- 3.9 恢复：选备份 → 确认 → 检测 TT → 执行 → 结果 ---- */
+/* ---- 3.9 恢复：选备份 → 确认 → 检测酒馆 → 执行 → 结果 ---- */
+/* 文案里的 {n} 换成酒馆名称 */
 const RC = {
-  0: ["ok", "恢复完成", "可打开 TauriTavern 查看"],
+  0: ["ok", "恢复完成", "可打开 {n} 查看"],
   2: ["bad", "备份文件无效", "请选择其他备份"],
-  3: ["warn", "TauriTavern 正在运行", "请先在最近任务中关闭 TauriTavern"],
+  3: ["warn", "{n} 正在运行", "请先在最近任务中关闭 {n}"],
   4: ["warn", "存储未解锁", "开机后需解锁一次"],
   5: ["bad", "恢复前备份失败", "当前数据未改动。请检查存储空间后重试"],
   6: ["bad", "恢复失败", "解压或复制出错，请重试或选择其他备份"],
@@ -814,17 +964,25 @@ const RC = {
   8: ["bad", "存储空间不足", "请清理存储空间后重试"],
   9: ["bad", "备份校验失败", "文件可能已损坏，请选择其他备份"],
 };
+const RC_NODIR = ["bad", "未找到 {n} 的数据目录", "请先安装并打开一次 {n}"];
+/* 备份所属酒馆：{id, label, running} */
+function targetFor(name) {
+  const id = targetOf({ name }), x = S && targetsOf(S).find((t) => t.id === id);
+  return { id, label: (x && x.label) || TGT[id] || id, running: id === "tt" ? !!S.tt.running : !!(x && x.running) };
+}
 function openPicker() {
   if (!S || !S.backup.items.length) { toast("暂无备份"); return; }
+  const items = S.backup.items, multi = new Set(items.map(targetOf)).size > 1;
   openSheet(`<h3 id="sheet-title">选择备份</h3><p class="lead">新的在前</p>
-    <div class="card">${S.backup.items.map((it) => { const tr = tierOf(it); return `<button class="row" data-pick="${esc(it.name)}"><div class="main"><div class="title num"><span class="chip ${TIER_CLS[tr] || ""}">${esc(TIER[tr] || tr)}</span>${esc(whenText(it.name))}</div><div class="sub num">${kb(it.kb)} · ${it.verified ? '<span class="okc">已校验</span>' : '<span class="warnc">未校验</span>'}</div></div>${IC.chev}</button>`; }).join("")}</div>
+    <div class="card">${items.map((it) => backupRow(it, "data-pick", multi)).join("")}</div>
     <div class="btns"><button class="btn" data-close>取消</button></div>`);
   $$("#sheet [data-pick]").forEach((el) => el.onclick = () => openRestore(el.dataset.pick));
 }
 function openRestore(name) {
   const it = S.backup.items.find((x) => x.name === name) || { name, kb: null, verified: false };
+  const tg = targetFor(name);
   openSheet(`<h3 id="sheet-title">恢复备份</h3>
-    <p class="lead num">${esc(whenText(name))} · ${kb(it.kb)} · ${it.verified ? "已校验" : "未校验"}</p>
+    <p class="lead num">${esc(tg.label)} · ${esc(whenText(name))} · ${kb(it.kb)} · ${it.verified ? "已校验" : "未校验"}</p>
     <ul class="steps">
       <li>${IC.shield}<span>恢复前自动保存当前数据</span></li>
       <li>${IC.layers}<span>覆盖同名聊天、角色卡、世界书、设置与扩展</span></li>
@@ -834,12 +992,12 @@ function openRestore(name) {
     <div class="btns" id="rs-btns"></div>`);
   restoreState(name, it);
 }
-/* 按当前 TT 状态画确认页的提示和按钮 */
+/* 按该酒馆当前状态画确认页的提示和按钮 */
 function restoreState(name, it) {
   const st = $("#rs-state"), bt = $("#rs-btns"); if (!st) return;
-  const running = S.tt.running, block = S.restoring ? "正在恢复" : S.backing_up ? "正在备份" : "";
+  const tg = targetFor(name), running = tg.running, block = S.restoring ? "正在恢复" : S.backing_up ? "正在备份" : "";
   st.innerHTML = block ? `<div class="note info">${IC.info}<div><b>${block}</b><span>请稍后重试</span></div></div>`
-    : running ? `<div class="note warn">${IC.warn}<div><b>TauriTavern 正在运行</b><span>请先在最近任务中关闭 TauriTavern</span></div></div>`
+    : running ? `<div class="note warn">${IC.warn}<div><b>${esc(tg.label)} 正在运行</b><span>请先在最近任务中关闭 ${esc(tg.label)}</span></div></div>`
     : !it.verified ? `<div class="note warn">${IC.warn}<div><b>此备份未校验</b><span>无法确认文件完整</span></div></div>` : "";
   bt.innerHTML = `${running || block ? `<button class="btn" id="rs-recheck">${IC.refresh}重新检测</button>` : ""}
     <button class="btn danger" id="rs-go" ${running || block ? "disabled" : ""}>恢复此备份</button>
@@ -850,22 +1008,23 @@ function restoreState(name, it) {
     const done = busy(re, "正在检测");
     try { render(await ui("status")); } catch (e) { toast("检测失败：" + e.message); }
     done();
-    if (S.tt.running) toast("TauriTavern 仍在运行");
+    if (targetFor(name).running) toast(`${tg.label} 仍在运行`);
     restoreState(name, it);
   };
   $("#rs-go").onclick = () => runRestore(name);
 }
 async function runRestore(name) {
-  const go = $("#rs-go"), done = busy(go, "正在恢复");
+  const go = $("#rs-go"), done = busy(go, "正在恢复"), lb = targetFor(name).label;
   $$("#rs-btns button").forEach((b) => b.disabled = true);
   sheetLocked = true; acting++;
-  $("#rs-state").innerHTML = `<div class="note info">${IC.info}<div><b>正在恢复</b><span>先保存当前数据，请勿打开 TauriTavern</span></div></div>`;
+  $("#rs-state").innerHTML = `<div class="note info">${IC.info}<div><b>正在恢复</b><span>先保存当前数据，请勿打开 ${esc(lb)}</span></div></div>`;
   let r;
   try { r = await ui(`restore ${name.replace(/[^A-Za-z0-9._-]/g, "")}`); }
   catch (e) { r = { rc: -1, out: [e.message] }; }
   sheetLocked = false; acting--; done();
   const rc = r && Number.isInteger(r.rc) ? r.rc : -1, out = (r && r.out) || [];
-  const [cls, title, hint] = RC[rc] || ["bad", "恢复失败", `错误代码 ${rc}`];
+  const nodir = rc === 2 && out.some((l) => /没有找到.*数据目录/.test(l));
+  const [cls, title, hint] = (nodir ? RC_NODIR : RC[rc] || ["bad", "恢复失败", `错误代码 ${rc}`]).map((s) => s.replace(/\{n\}/g, lb));
   const pre = out.map((l) => /[^\s：:]+-prerestore\.tar\.gz/.exec(l)).find(Boolean);
   const extra = pre ? `<span>${rc === 0 ? "当前数据已另存为「恢复前」备份" : "当前数据已保存为「恢复前」备份，可从列表恢复"}</span>` : "";
   const icon = cls === "ok" ? IC.check : cls === "bad" ? IC.x : IC.warn;
@@ -876,7 +1035,7 @@ async function runRestore(name) {
   const retry = rc === 3 || rc === 4 || rc === 7;
   $("#rs-btns").innerHTML = rc === 0 ? `<button class="btn primary" data-close>完成</button>`
     : `${retry ? `<button class="btn primary" id="rs-back">重新检测</button>` : ""}
-       ${rc === 2 || rc === 9 ? `<button class="btn" id="rs-pick">选择其他备份</button>` : ""}
+       ${(rc === 2 && !nodir) || rc === 9 ? `<button class="btn" id="rs-pick">选择其他备份</button>` : ""}
        <button class="btn" data-close>关闭</button>`;
   $$("#sheet [data-close]").forEach((el) => el.onclick = closeSheet);
   const back = $("#rs-back");
@@ -935,9 +1094,19 @@ $("#scrim").onclick = closeSheet;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheetOpen()) closeSheet(); });
 
 /* ---- 3.12 事件绑定 ---- */
-$("#btn-backup").onclick = doBackup;
+$("#btn-backup").onclick = () => doBackup();
 $("#btn-restore").onclick = openPicker;
 $("#btn-pulled").onclick = confirmPulled;
+$("#btn-sync").onclick = doSync;
+$("#targets").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-bk-target]"); if (b) doBackup({ currentTarget: b }, b.dataset.bkTarget);
+});
+$("#filters").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-filter]"); if (!b) return;
+  filter = b.dataset.filter; showAll = false;
+  try { localStorage.setItem("tt-guard.filter", filter); } catch {}
+  renderBackups(S);
+});
 $("#btn-selftest").onclick = doSelftest;
 $("#btn-diag").onclick = doDiag;
 $("#backups").addEventListener("click", (e) => {
@@ -948,6 +1117,7 @@ $("#alerts").addEventListener("click", (e) => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   if (b.dataset.act === "enable-backup") setKey("backup", 1).then(() => load(true));
   if (b.dataset.act === "mark-pulled") confirmPulled();
+  if (b.dataset.act === "sync") doSync();
 });
 
 /* ---- 3.13 读取与自动刷新 ---- */
@@ -976,8 +1146,23 @@ setInterval(() => { if (!document.hidden && !sheetOpen() && !acting) load(true);
 function demo(args, raw) {
   const H = 3600, D = 86400, now = Math.floor(Date.now() / 1000);
   const p2 = (n) => String(n).padStart(2, "0");
-  const stamp = (t, sfx) => { const d = new Date(t * 1000); return `tt-default-user-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}${sfx ? "-" + sfx : ""}.tar.gz`; };
+  const PFX = { tt: "tt-default-user", sillydroid: "sillydroid", termux: "termux-st" };
+  const LABEL = { tt: "TauriTavern", sillydroid: "SillyDroid", termux: "SillyTavern（Termux）" };
+  const PKG = { tt: "com.tauritavern.client", sillydroid: "com.jm.sillydroid", termux: "com.termux" };
+  const KB = { tt: 45400, sillydroid: 18200, termux: 62800 };
+  const stamp = (t, sfx, tg = "tt") => { const d = new Date(t * 1000); return `${PFX[tg]}-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}${sfx ? "-" + sfx : ""}.tar.gz`; };
   const day = (o) => { const d = new Date((now - o * D) * 1000); return `${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
+  const tOf = (n) => { const m = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(n); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : 0; };
+  const mk = (tg, list, base = 0) => list.map(([o, tier], i) => ({ name: stamp(now - base - o, tier === "pre" ? "prerestore" : "", tg), target: tg, tier, kb: KB[tg] - i * 120, verified: !(tg === "tt" && i === 5) }));
+  const tgt = (id, o) => Object.assign({ id, label: LABEL[id], pkg: PKG[id], installed: true, present: true, running: false, last: null, check: null, fails: 0, count: 0 }, o);
+  /* 按备份文件重新计算各酒馆的份数；items 新的在前 */
+  const sync = (s) => {
+    s.backup.items.sort((a, b) => tOf(b.name) - tOf(a.name));
+    s.targets.forEach((t) => { t.count = s.backup.items.filter((it) => it.target === t.id).length; });
+    const tt = s.targets.find((t) => t.id === "tt");
+    if (tt) Object.assign(s.backup, { last: tt.last, check: tt.check, fails: tt.fails });
+    s.space.backups = s.backup.items.reduce((x, it) => x + it.kb, 0);
+  };
   const build = (scene) => {
     const s = {
       now, version: "1.6",
@@ -989,27 +1174,53 @@ function demo(args, raw) {
       reasons: ["3 被强制停止", "1 内存不足，被系统结束"],
       exits: [`${day(2)} 21:14 内存不足，被系统结束（生成中）`, `${day(1)} 09:02 被强制停止`, `${day(1)} 23:40 被强制停止`],
       space: { data: 101500, logs: 2660, cache: 1740, backups: 0 }, crashes: 0, free: 12800000, restoring: false, backing_up: false,
-      backup: { dir: "/data/adb/tt-backups", last: now - 2 * H, check: now - 2 * H, fails: 0, mac_pulled: now - 5 * H, watch_since: now - 9 * D,
-        items: [[2 * H, "new"], [8 * H, "2d"], [20 * H, "pre"], [26 * H, "2d"], [2 * D, "day"], [3 * D, "day"], [5 * D, "day"], [12 * D, "week"], [40 * D, "month"]]
-          .map(([o, tier], i) => ({ name: stamp(now - o, tier === "pre" ? "prerestore" : ""), tier, kb: 45400 - i * 120, verified: i !== 5 })) },
+      targets: [
+        tgt("tt", { running: true, last: now - 2 * H, check: now - 2 * H }),
+        tgt("sillydroid", { last: now - 5 * H, check: now - H }),
+        tgt("termux", { running: true, last: now - 26 * H, check: now - 3 * H }),
+      ],
+      backup: { dir: "/data/adb/tt-backups", last: null, check: null, fails: 0, mac_pulled: now - 5 * H, pc_host: "MacBook-Pro", sync_request: null, watch_since: now - 9 * D,
+        items: [
+          ...mk("tt", [[2 * H, "new"], [8 * H, "2d"], [20 * H, "pre"], [26 * H, "2d"], [2 * D, "day"], [3 * D, "day"], [5 * D, "day"], [12 * D, "week"], [40 * D, "month"]]),
+          ...mk("sillydroid", [[5 * H, "new"], [30 * H, "2d"], [4 * D, "day"]]),
+          ...mk("termux", [[26 * H, "new"], [3 * D, "day"], [9 * D, "week"]]),
+        ] },
       config: { backup: 1, backup_hours: 6, backup_private: 1, keep_days: 7, keep_weeks: 4, keep_months: 6, mac_alert_days: 3, auto_reopen: 1, notify: 1, cleanup_days: 30, temp_alert: 45 },
-      log: ["开始运行（版本 1.6）", "已备份并校验 TT 数据：" + stamp(now - 8 * H) + "（45400 KB，不含 API 密钥）", "TT（4976）被 Android 冻结", "TT（4976）解冻，冻结约 45 秒", "已备份并校验 TT 数据：" + stamp(now - 2 * H) + "（45390 KB）；按分层保留清理 1 份旧备份"]
+      log: ["开始运行（版本 1.6）", "已检测到：TauriTavern、SillyDroid、SillyTavern（Termux）", "已备份并校验 TauriTavern 数据：" + stamp(now - 8 * H) + "（45400 KB，不含 API 密钥）", "TT（4976）被 Android 冻结", "已备份并校验 SillyDroid 数据：" + stamp(now - 5 * H, "", "sillydroid") + "（18200 KB）", "已备份并校验 TauriTavern 数据：" + stamp(now - 2 * H) + "（45390 KB）；按分层保留清理 1 份旧备份"]
         .map((l, i) => `${day(0)} ${p2(8 + i)}:1${i}:0${i} ${l}`),
       _recheck: 0,
     };
+    if (scene === "ttonly") {
+      s.targets = [tgt("tt", { running: true, last: now - 2 * H, check: now - 2 * H }), tgt("sillydroid", { installed: false, present: false }), tgt("termux", { installed: false, present: false })];
+      s.backup.items = s.backup.items.filter((it) => it.target === "tt");
+      s.backup.pc_host = "";
+    }
+    if (scene === "syncing") {
+      Object.assign(s.backup, { sync_request: now - 4 * 60, mac_pulled: now - 2 * D, pc_host: "DESKTOP-7Q2K" });
+    }
     if (scene === "alerts") {
       Object.assign(s.tt, { generating: true, frozen: "ColorOS" });
       Object.assign(s.keep, { whitelist: false, bucket: 30, network: "APP_BACKGROUND", temp: 47 });
       s.temps = { battery: 47, soc: 58, board: null };
-      Object.assign(s.backup, { fails: 3, last: now - 3 * D, check: now - 3 * D, mac_pulled: now - 6 * D });
-      s.backup.items.forEach((it, i) => { const t = now - 3 * D - i * D; it.name = stamp(t, it.tier === "pre" ? "prerestore" : ""); });
+      s.targets = [tgt("tt", { running: true, last: now - 3 * D, check: now - 3 * D, fails: 3 }), tgt("sillydroid", { present: false }), tgt("termux", { last: now - 4 * D, check: now - 4 * D })];
+      s.backup.items = s.backup.items.filter((it) => it.target !== "sillydroid");
+      s.backup.items.forEach((it, i) => { it.name = stamp(now - 3 * D - i * D, it.tier === "pre" ? "prerestore" : "", it.target); });
+      Object.assign(s.backup, { mac_pulled: now - 6 * D, sync_request: now - 50 * 60 });
       s.free = 480000; s.crashes = 2;
       s.log.push(`${day(0)} 13:20:11 备份失败：存储空间不足`, `${day(0)} 13:41:05 TT 后台网络受限（APP_BACKGROUND）`);
     }
-    if (scene === "empty") { s.backup = { dir: "/data/adb/tt-backups", last: null, check: null, fails: 0, mac_pulled: null, watch_since: now - 3 * H, items: [] }; s.tt.running = false; s.reasons = []; s.exits = []; s.days = []; s.today = [0, 0, 0, 0, 0, 0]; }
+    if (scene === "empty") {
+      s.backup = { dir: "/data/adb/tt-backups", last: null, check: null, fails: 0, mac_pulled: null, pc_host: "", sync_request: null, watch_since: now - 3 * H, items: [] };
+      s.targets = [tgt("tt"), tgt("sillydroid", { installed: false, present: false }), tgt("termux", { present: false })];
+      s.tt.running = false; s.reasons = []; s.exits = []; s.days = []; s.today = [0, 0, 0, 0, 0, 0];
+    }
     if (scene === "busy") { s.backing_up = true; }
-    if (scene === "missing") { s.tt = { installed: false, running: false, generating: false, frozen: "", pids: "", version: "", webview: "" }; s.keep.whitelist = false; s.days = []; }
-    s.space.backups = s.backup.items.reduce((x, it) => x + it.kb, 0);
+    if (scene === "missing") {
+      s.tt = { installed: false, running: false, generating: false, frozen: "", pids: "", version: "", webview: "" }; s.keep.whitelist = false; s.days = [];
+      s.targets = [tgt("tt", { installed: false, present: false }), tgt("sillydroid", { installed: false, present: false }), tgt("termux", { installed: false, present: false })];
+      s.backup.items = s.backup.items.filter((it) => it.target === "tt");
+    }
+    sync(s);
     return s;
   };
   demo.scene = demo.scene || "normal";
@@ -1022,17 +1233,35 @@ function demo(args, raw) {
   switch (cmd) {
     case "status": {
       /* 恢复确认页里点「重新检测」：第一次仍在运行，第二次已关闭 */
-      if (demo.rechecking) { if (++st._recheck >= 2) st.tt.running = false; }
+      if (demo.rechecking && ++st._recheck >= 2) { st.tt.running = false; st.targets.forEach((t) => { t.running = false; }); }
       return wait(clone(st));
     }
-    case "backup":
-      if (st.tt.generating) return wait({ ok: false, msg: "正在生成回复，请稍后再试" });
-      if (st.backing_up) return wait({ ok: false, msg: "另一个备份正在进行" });
-      st.backup.items.forEach((it) => { if (it.tier === "new") it.tier = "2d"; });
-      st.backup.items.unshift({ name: stamp(st.now), tier: "new", kb: 45410, verified: true });
-      st.backup.last = st.backup.check = st.now; st.backup.fails = 0;
-      st.space.backups += 45410;
-      return wait({ ok: true, name: st.backup.items[0].name, kb: 45410, dropped: 1 }, 1200);
+    case "backup": {
+      if (st.backing_up) return wait({ ok: false, msg: "备份失败：另一个备份正在进行，或数据目录不可读" });
+      const ids = a1 ? [a1] : st.targets.filter((t) => t.present).map((t) => t.id);
+      if (!ids.length) return wait({ ok: false, msg: "未检测到酒馆数据" });
+      const names = [], skipped = [];
+      let total = 0;
+      ids.forEach((id) => {
+        const t = st.targets.find((x) => x.id === id); if (!t) return;
+        if (id === "tt" && st.tt.generating) { skipped.push(t.label); return; }
+        st.backup.items.forEach((it) => { if (it.target === id && it.tier === "new") it.tier = "2d"; });
+        const it = { name: stamp(st.now, "", id), target: id, tier: "new", kb: KB[id] + 10, verified: true };
+        st.backup.items.push(it); names.push(it.name); total += it.kb;
+        Object.assign(t, { last: st.now, check: st.now, fails: 0 });
+      });
+      sync(st);
+      if (!names.length) return wait({ ok: false, msg: "正在生成回复，请稍后再试" }, 800);
+      return wait({ ok: true, names, kb: total, dropped: 1, skipped: skipped.join(" "), failed: "" }, 1200);
+    }
+    case "request-sync":
+      st.backup.sync_request = st.now;
+      /* 等待电脑同步场景：电脑未连接，请求一直等待；其他场景：几秒后电脑完成同步 */
+      if (demo.scene !== "syncing") {
+        clearTimeout(demo.pcT);
+        demo.pcT = setTimeout(() => { if (demo.state !== st) return; Object.assign(st.backup, { sync_request: null, mac_pulled: Math.floor(Date.now() / 1000), pc_host: st.backup.pc_host || "MacBook-Pro" }); load(true); }, 6000);
+      }
+      return wait({ ok: true }, 300);
     case "set":
       if (a1 === "backup_private" && st.backing_up) return wait({ ok: false, msg: "正在备份，请稍后再改存储位置" });
       if (!(a1 in st.config)) return wait({ ok: false, msg: `不认识的开关或数值：${a1} ${a2}` });
@@ -1040,24 +1269,28 @@ function demo(args, raw) {
       if (a1 === "backup_private") st.backup.dir = +a2 ? "/data/adb/tt-backups" : "/data/media/0/Documents/TauriTavern-backup";
       return wait({ ok: true }, 250);
     case "restore": {
+      const tg = /^sillydroid-/.test(a1) ? "sillydroid" : /^termux-st-/.test(a1) ? "termux" : "tt";
+      const t = st.targets.find((x) => x.id === tg) || {}, lb = LABEL[tg];
+      const running = tg === "tt" ? st.tt.running : t.running;
       const sel = document.getElementById("demo-rc").value;
-      const rc = sel === "auto" ? (st.tt.running ? 3 : 0) : +sel;
-      const pre = stamp(st.now, "prerestore");
-      const OUT = { 0: ["已恢复：" + a1, "恢复前的数据另存为：" + pre], 2: ["备份内容不对（foo），不恢复"], 3: ["TT 正在运行：先在最近任务里把 TT 划掉，再恢复"], 4: ["手机开机后还没解锁过，先解锁再恢复"],
+      const rc = sel === "auto" ? (!t.present ? 2 : running ? 3 : 0) : sel === "2d" ? 2 : +sel;
+      const pre = stamp(st.now, "prerestore", tg);
+      const OUT = { 0: ["已恢复：" + a1, "恢复前的数据另存为：" + pre], 2: [sel === "2d" || !t.present ? `没有找到 ${lb} 的数据目录，请先安装并打开一次` : "备份内容不对（foo），不恢复"], 3: [`${lb} 正在运行：请先在最近任务中关闭 ${lb}`], 4: ["手机开机后还没解锁过，先解锁再恢复"],
         5: ["恢复前先备份现在的数据，失败了，不恢复"], 6: ["解压失败"], 7: ["另一个恢复正在进行"], 8: ["存储空间不够（剩 380.0 MB），不恢复"], 9: ["备份文件校验不对，可能已损坏，不恢复"] };
-      if (rc === 0) { st.backup.items.unshift({ name: pre, tier: "pre", kb: 45420, verified: true }); st.log.push(`${day(0)} 15:02:00 从备份恢复了 TT 数据：${a1}`); }
+      if (rc === 0) { st.backup.items.push({ name: pre, target: tg, tier: "pre", kb: KB[tg] + 20, verified: true }); sync(st); st.log.push(`${day(0)} 15:02:00 从备份恢复了 ${lb} 数据：${a1}`); }
       return wait({ rc, out: OUT[rc] || ["未知错误"] }, 1500);
     }
     case "mark-pulled":
-      st.backup.mac_pulled = st.now;
-      return wait(raw ? "ok" : "ok", 300);
+      Object.assign(st.backup, { mac_pulled: st.now, sync_request: null });
+      return wait("ok", 300);
     case "selftest": {
       const bad = demo.scene === "alerts", miss = demo.scene === "missing";
+      const found = st.targets.filter((t) => t.present).map((t) => t.label).join("、");
       return wait([
         { name: "模块版本", ok: true, detail: "1.6" },
         { name: "TauriTavern", ok: !miss, detail: miss ? "未安装" : "已安装 2.3.0" },
         { name: "存储解锁", ok: true, detail: "已解锁" },
-        { name: "数据目录", ok: !miss, detail: miss ? "不可读：/data/data/com.tauritavern.client/files/data/default-user" : "可读" },
+        { name: "酒馆数据", ok: !!found, detail: found ? "已检测到：" + found : "未检测到任何酒馆的数据目录" },
         { name: "备份目录", ok: true, detail: st.backup.dir },
         { name: "存储空间", ok: !bad, detail: bad ? "不足：剩余 468.8 MB" : "剩余 12.2 GB" },
         { name: "系统命令", ok: true, detail: "齐全" },
