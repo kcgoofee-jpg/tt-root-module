@@ -25,7 +25,7 @@ BATTERY_TEMP=${BATTERY_TEMP:-/sys/class/power_supply/battery/temp}   # 单位 0.
 #   0 「内部存储/Documents/TauriTavern-backup」：文件管理器能直接看到（有存储权限的应用也都能读）
 PRIVATE_BK=${PRIVATE_BK:-/data/adb/tt-backups}
 SHARED_BK=${SHARED_BK:-/data/media/0/Documents/TauriTavern-backup}
-# 备份哪些：聊天、角色卡、设置（default-user），扩展，Claude Max 的归档，自定义样式，TT 的 MCP / 技能配置
+# 备份哪些：聊天、角色卡、设置（default-user），扩展，CCST 的归档，自定义样式，TT 的 MCP / 技能配置
 BACKUP_MEMBERS="default-user extensions _cm_archive _css _tauritavern"
 RETENTION=${RETENTION:-$MODDIR/retention.awk}
 CG_ROOT=${CG_ROOT:-/sys/fs/cgroup/apps}                 # Android 冻结器（cgroup v2）
