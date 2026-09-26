@@ -45,12 +45,12 @@ record_prior() {
         echo "RUN_IN_BACKGROUND=$(appop_mode RUN_IN_BACKGROUND)"
         echo "RUN_ANY_IN_BACKGROUND=$(appop_mode RUN_ANY_IN_BACKGROUND)"
     } > "$PRIOR"
-    log "记下原值：白名单 $wl，后台运行 $(appop_mode RUN_ANY_IN_BACKGROUND)"
+    log "记下原值：白名单 ${wl}，后台运行 $(appop_mode RUN_ANY_IN_BACKGROUND)"
 }
 
 ensure() {
     if ! pm path "$PKG" >/dev/null 2>&1; then
-        [ "$installed" != "no" ] && log "没装 $PKG，先不做，装上后自动生效"
+        [ "$installed" != "no" ] && log "没装 ${PKG}，先不做，装上后自动生效"
         installed=no
         for t in sillydroid termux; do t_present "$t" && keep_other "$(t_pkg "$t")"; done
         return 1
@@ -74,7 +74,7 @@ ensure() {
     esac
     new_uid=$(app_uid)
     old_uid=$(state_get tt_uid)
-    [ -n "$old_uid" ] && [ -n "$new_uid" ] && [ "$old_uid" != "$new_uid" ] && log "TT 重装过（uid $old_uid → $new_uid）"
+    [ -n "$old_uid" ] && [ -n "$new_uid" ] && [ "$old_uid" != "$new_uid" ] && log "TT 重装过（uid $old_uid → ${new_uid}）"
     [ -n "$new_uid" ] && [ "$new_uid" != "$old_uid" ] && state_set tt_uid "$new_uid"
     uid=$new_uid
     v=$(tt_version)
@@ -127,7 +127,7 @@ report_exits() {
             why=$(exit_reason_zh "$r" "$sr")
         else
             why="系统没记原因"; r=unknown
-            log "TT（$died_in_gen）生成回复时进程没了，系统没记原因"
+            log "TT（${died_in_gen}）生成回复时进程没了，系统没记原因"
         fi
         extra="重新打开后可补回暂存的回复。"
         if { system_kill "$r" "${sr:-}" || [ "$r" = unknown ]; } && [ "$(cfg auto_reopen 1)" = 1 ] \
@@ -139,7 +139,7 @@ report_exits() {
                 extra="已自动重新打开。"
             fi
         fi
-        alert "TauriTavern 在生成中退出" "原因：$why。$extra"
+        alert "TauriTavern 在生成中退出" "原因：${why}。$extra"
     fi
     rm -f "$STATE.exits"
 }
@@ -240,16 +240,16 @@ maybe_live() {
 # 开机后（手机解锁后）检查一次：断电、没电关机可能留下写到一半的备份，或中断的恢复
 after_boot() {
     for n in $(check_backups); do
-        log "最新备份校验失败，已隔离：$n（可能是备份时断电）"
+        log "最新备份校验失败，已隔离：${n}（可能是备份时断电）"
         alert "备份文件损坏，已隔离" "$n 校验失败，可能是备份时断电。其余备份不受影响。"
     done
     p=$(cat "$GDIR/restore.pending" 2>/dev/null)
     if [ -n "$p" ]; then
         name=${p%%|*}; safety=${p#*|}
         for tg in $TARGETS; do rm -rf "$(t_root "$tg")/.cc-restore"; done
-        log "上次恢复未完成（断电或重启）：$name；恢复前的数据在 $safety"
+        log "上次恢复未完成（断电或重启）：${name}；恢复前的数据在 $safety"
         state_set restore_interrupted "$p"
-        alert "上次恢复未完成" "恢复 $name 时中断。请在 TT 守护中重新恢复；恢复前的数据已另存为 $safety。"
+        alert "上次恢复未完成" "恢复 $name 时中断。请在 TT 守护中重新恢复；恢复前的数据已另存为 ${safety}。"
         rm -f "$GDIR/restore.pending"
     fi
 }
@@ -258,7 +258,7 @@ after_boot() {
 check_power() {
     ps_now=$(power_save)
     [ "$ps_now" = "$power_prev" ] && return
-    if [ -n "$ps_now" ]; then log "系统已开启$ps_now：后台应用可能被限制"
+    if [ -n "$ps_now" ]; then log "系统已开启${ps_now}：后台应用可能被限制"
     elif [ -n "$power_prev" ]; then log "系统已关闭省电模式"; fi
     power_prev=$ps_now
 }
@@ -370,16 +370,16 @@ tick() {
             stat_add 4 1
             if [ "$gen" = 1 ]; then
                 stat_add 5 1
-                log "TT（$pid）被 $by 冻结了（正在生成回复）"
+                log "TT（${pid}）被 $by 冻结了（正在生成回复）"
                 if [ -z "$gen_alerted" ]; then
-                    alert "TauriTavern 在生成中被冻结" "冻结方：$by。打开应用即可恢复。"
+                    alert "TauriTavern 在生成中被冻结" "冻结方：${by}。打开应用即可恢复。"
                     gen_alerted=1
                 fi
             else
-                log "TT（$pid）被 $by 冻结了"
+                log "TT（${pid}）被 $by 冻结了"
             fi
         elif [ -z "$by" ] && [ -n "$frozen_since" ]; then
-            log "TT（$pid）解冻，冻了约 $((now - frozen_since)) 秒"
+            log "TT（${pid}）解冻，冻了约 $((now - frozen_since)) 秒"
             frozen_since=""
         fi
     done
@@ -389,8 +389,8 @@ tick() {
     if [ "$gen" = 1 ] && [ -z "$net_alerted" ]; then
         n=$(net_effective "$uid")
         if [ -n "$n" ] && [ "$n" != NONE ]; then
-            log "TT 生成回复时网络被限制（$n）"
-            alert "TauriTavern 在生成中网络受限" "限制类型：$n。"
+            log "TT 生成回复时网络被限制（${n}）"
+            alert "TauriTavern 在生成中网络受限" "限制类型：${n}。"
             net_alerted=1
         fi
     fi

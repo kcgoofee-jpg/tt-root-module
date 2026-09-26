@@ -26,6 +26,8 @@ SillyDroid 和 Termux 中的 SillyTavern 是常驻的 node 服务，需要保活
 |---|---|
 | 备份 | 数据有变化时最多每 6 小时一次；生成中、开机未解锁、存储空间不足时不备份。完成后立即校验（完整读取、确认不含 `secrets.json`），并写 `.sha256`。 |
 | 备份范围 | `default-user`（聊天、角色卡、世界书、设置）、`extensions`、`_cm_archive`、`_css`、`_tauritavern`。不含任何位置的 `secrets.json`（API 密钥）、TT 自带备份、缩略图、日志、缓存。 |
+| 实时副本 | TT 每次生成结束后立即复制变化的文件，其余情况每 5 分钟检查一次。只复制变化的文件、不删除，不含密钥。放在 `/data/adb/tt-backups/live`。用于弥补两次完整备份之间的改动；可在界面中从实时副本恢复。 |
+| 断电与低电量 | 备份写入存储后才改名；开机后校验最新备份，损坏的隔离并通知；恢复中途断电，开机后通知并给出恢复前备份；电量低于 15% 且未充电时提前备份一次，并拒绝恢复。 |
 | 分层保留 | 最新一份和近 2 天全部保留；之后每天 / 每周 / 每月各留最新一份（默认 7 天 / 4 周 / 6 个月）。系统时间异常跳变时不删除。恢复前自动保存的备份单独保留最新 3 份。每份约 45 MB，总占用约 1 GB。 |
 | 存储位置 | 默认 `/data/adb/tt-backups`（仅 root 可读）；可切换到「内部存储/Documents/TauriTavern-backup」。卸载模块时私密备份移至共享位置。 |
 | 同步到电脑 | 电脑端定时任务每 30 分钟从手机拉取新备份并核对 sha256，电脑上按 14 天 / 8 周 / 24 个月保留。手机端超过 3 天未同步时提醒。 |
@@ -42,6 +44,9 @@ KernelSU 管理器 → 模块 → 点击「TT 守护」打开。首屏显示运�
 模块卡片上的「执行」按钮输出同样信息的文本版本。
 
 ## 安装与更新
+
+支持的 Root 管理器：KernelSU、KernelSU Next、SukiSU Ultra、APatch（可直接打开界面）；Magisk 需另装 WebUI X 等应用打开界面，「执行」按钮需 Magisk 28 以上。实测环境为 KernelSU。
+已发布到 GitHub Releases，模块中配置了 `updateJson`，可在管理器中直接更新。
 
 1. 构建：`zsh build-ksu-module.sh`（先运行全部测试），产物为 `dist/claudemax-tt-keepalive-<版本>.zip`。电脑端「安卓保活模块」菜单会构建并推送到手机的「下载」。
 2. 手机：KernelSU 管理器 → 模块 → 从本地安装 → 选择 zip → 重启。升级时保留原值、状态、统计、设置和日志。
@@ -94,6 +99,8 @@ powershell -ExecutionPolicy Bypass -File pc\install-windows.ps1
 | `notify` | 1 | 异常通知，0 = 仅记录日志 |
 | `cleanup_days` | 30 | 清理 TT 自身多少天前的日志，0 = 不清理 |
 | `temp_alert` | 45 | 生成中电池温度提醒阈值（°C），0 = 关闭 |
+| `live` | 1 | 实时副本 |
+| `live_minutes` | 5 | 实时副本的检查间隔（分钟）；TT 生成结束后立即复制 |
 
 ## 手动恢复
 

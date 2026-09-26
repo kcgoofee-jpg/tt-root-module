@@ -1,7 +1,7 @@
 id=claudemax_tt_keepalive
 name=TT 守护（酒馆备份 · 保活）
-version=1.7
-versionCode=10
+version=1.8
+versionCode=11
 author=SillyTavern-ClaudeMax
-description=SillyTavern 类应用的数据保护：自动检测 TauriTavern、SillyDroid、Termux 版 SillyTavern；自动备份（有变化最多每 6 小时，校验，日/周/月分层保留，私密存储，不含密钥），一键恢复，同步到电脑（Mac / Windows），异常通知与诊断，保活设置。离线运行，卸载时还原设置。在 KernelSU 中点击模块可打开界面。
+description=SillyTavern 类应用的数据保护：自动检测 TauriTavern、SillyDroid、Termux 版 SillyTavern；实时副本（聊天变化后几分钟内），自动备份（有变化最多每 6 小时，校验，日/周/月分层保留，私密存储，不含密钥），一键恢复，同步到电脑（Mac / Windows），异常通知与诊断，保活设置。离线运行，卸载时还原设置。在 KernelSU 中点击模块可打开界面。
 updateJson=https://raw.githubusercontent.com/kcgoofee-jpg/tt-root-module/main/update.json

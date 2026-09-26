@@ -57,7 +57,7 @@ status() {
     tail -n 7 "$STATS" 2>/dev/null | awk '{ printf "%s[\"%s\",%d,%d,%d,%d,%d,%d]", (NR > 1 ? "," : ""), $1, $2, $3, $4, $5, $6, $7 }'
     printf '],'
     printf '"reasons":'
-    grep "退出：" "$LOG" 2>/dev/null | sed 's/.*退出：//; s/［.*//; s/（.*//' | sort | uniq -c | sort -rn | sed 's/^ *//' | jlines
+    grep "退出：" "$LOG" 2>/dev/null | sed 's/.*退出：//; s/［.*//; s/（.*//' | LC_ALL=C sort | LC_ALL=C uniq -c | LC_ALL=C sort -rn | sed 's/^ *//' | jlines
     printf ',"exits":'
     exit_records | head -n 5 | while IFS= read -r rec; do exit_line "$rec"; done | jlines
     printf ',"space":{"data":%s,"logs":%s,"cache":%s,"backups":%s},' "$(num "$sp_data")" "$(num "$sp_logs")" "$(num "$sp_cache")" "$(num "$sp_bk")"
@@ -111,14 +111,14 @@ selftest() {
     rm_=$(root_manager)
     case "$rm_" in
         未识别) item "Root 管理器" 0 "未识别（KernelSU、KernelSU Next、SukiSU Ultra、APatch、Magisk 以外的管理器未经测试）" ;;
-        Magisk*) item "Root 管理器" 1 "$rm_。Magisk 不能直接打开模块界面，需另装 WebUI X 等应用；「执行」按钮需 Magisk 28 以上" ;;
+        Magisk*) item "Root 管理器" 1 "${rm_}。Magisk 不能直接打开模块界面，需另装 WebUI X 等应用；「执行」按钮需 Magisk 28 以上" ;;
         *) item "Root 管理器" 1 "$rm_" ;;
     esac
     ps_=$(power_save)
-    if [ -n "$ps_" ]; then item "省电模式" 0 "已开启$ps_：后台的酒馆可能被结束，备份不受影响"; else item "省电模式" 1 "未开启"; fi
+    if [ -n "$ps_" ]; then item "省电模式" 0 "已开启${ps_}：后台的酒馆可能被结束，备份不受影响"; else item "省电模式" 1 "未开启"; fi
     if pm path "$PKG" >/dev/null 2>&1; then item "TauriTavern" 1 "已安装 $(tt_version)"; else item "TauriTavern" 0 "未安装"; fi
     if unlocked; then item "存储解锁" 1 "已解锁"; else item "存储解锁" 0 "开机后尚未解锁"; fi
-    found=""; for t in $TARGETS; do t_present "$t" && found="$found、$(t_label "$t")"; done
+    found=""; for t in $TARGETS; do t_present "$t" && found="${found}、$(t_label "$t")"; done
     if [ -n "$found" ]; then item "酒馆数据" 1 "已检测到：${found#、}"; else item "酒馆数据" 0 "未检测到任何酒馆的数据目录"; fi
     d=$(bdir)
     if mkdir -p "$d" 2>/dev/null && touch "$d/.selftest" 2>/dev/null; then rm -f "$d/.selftest"; item "备份目录" 1 "$d"; else item "备份目录" 0 "不可写：$d"; fi

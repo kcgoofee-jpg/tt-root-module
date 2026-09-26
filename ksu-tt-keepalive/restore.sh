@@ -61,7 +61,7 @@ if [ -n "$live" ]; then
 else
     allowed=$(t_members "$t" | sed 's/ /|/g; s/\./\\./g')
     bad=$(tar -tzf "$f" 2>/dev/null | grep -vE "^($allowed)(/|\$)" | head -n 1)
-    [ -z "$bad" ] || { echo "备份内容不对（$bad），不恢复"; exit 2; }
+    [ -z "$bad" ] || { echo "备份内容不对（${bad}），不恢复"; exit 2; }
     tar -tzf "$f" 2>/dev/null | grep -qE '(^|/)\.\.(/|$)' && { echo "备份里有 ..，不恢复"; exit 2; }
     stage=$root/.cc-restore
     rm -rf "${stage:?}"; mkdir -p "$stage" || exit 6
@@ -104,6 +104,6 @@ if [ $copied = 1 ]; then
     exit 0
 fi
 drop_stage
-log "从备份恢复失败（复制时出错）：$name；恢复前的备份在 ${safety##*/}"
+log "从备份恢复失败（复制时出错）：${name}；恢复前的备份在 ${safety##*/}"
 echo "复制失败。恢复前的数据在 ${safety##*/}，可以用它恢复回去"
 exit 6

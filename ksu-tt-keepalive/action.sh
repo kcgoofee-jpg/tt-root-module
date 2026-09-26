@@ -8,10 +8,10 @@ if in_whitelist; then echo "电池优化白名单：在"; else echo "电池优�
 echo "后台运行：$(appop_mode RUN_ANY_IN_BACKGROUND)"
 b=$(am get-standby-bucket "$PKG" 2>/dev/null)
 case "$b" in 5) m="豁免，最好" ;; 10) m="活跃" ;; 20) m="常用" ;; 30) m="偶尔" ;; 40) m="很少" ;; 45) m="受限" ;; *) m="?" ;; esac
-echo "待机分组：$b（$m）"
+echo "待机分组：${b}（${m}）"
 uid=$(app_uid)
 n=$(net_effective "$uid")
-case "$n" in NONE) echo "网络：没被限制" ;; '') echo "网络：看不到（TT 没在运行时正常）" ;; *) echo "网络：被限制（$n）" ;; esac
+case "$n" in NONE) echo "网络：没被限制" ;; '') echo "网络：看不到（TT 没在运行时正常）" ;; *) echo "网络：被限制（${n}）" ;; esac
 t=$(battery_temp); c=$(soc_temp); b=$(board_temp)
 [ -n "$t$c$b" ] && echo "温度：电池 ${t:-—}°C，处理器 ${c:-—}°C，主板 ${b:-—}°C"
 echo "TT 版本：$(tt_version)；系统浏览器内核：$(webview_version)"
@@ -26,7 +26,7 @@ else
     if generating; then echo "正在生成回复：是（TT 开着前台服务，不会被 Android 冻结）"; else echo "正在生成回复：否"; fi
     for pid in $pids; do
         by=$(frozen_by "$pid" "$uid")
-        echo "进程 $pid：${by:+被 $by 冻结}${by:-没冻结}"
+        echo "进程 ${pid}：${by:+被 $by 冻结}${by:-没冻结}"
     done
     # 系统自己记的优先级（冻结和查杀按这个判断：900 及以上会被冻结）
     dumpsys activity processes "$PKG" 2>/dev/null | awk -v p="$PKG" '/\*APP\*/{m=index($0, ":" p "/")>0} m&&/oom adj:/{sub(/^ */,""); print "系统记录的 " $0} m&&/isFrozen=/{match($0,/isFrozen=[a-z]*/); print "系统记录的 " substr($0,RSTART,RLENGTH); m=0}'
@@ -42,7 +42,7 @@ if [ -s "$STATS" ]; then
 else
     echo "还没有统计（1.4 起才有）"
 fi
-r=$(grep "退出：" "$LOG" 2>/dev/null | sed 's/.*退出：//; s/［.*//; s/（.*//' | sort | uniq -c | sort -rn)
+r=$(grep "退出：" "$LOG" 2>/dev/null | sed 's/.*退出：//; s/［.*//; s/（.*//' | LC_ALL=C sort | LC_ALL=C uniq -c | LC_ALL=C sort -rn)
 [ -n "$r" ] && { echo "退出原因（最近 7 天）："; echo "$r" | sed 's/^ */  /'; }
 
 echo "== TT 占的空间 =="
@@ -68,7 +68,7 @@ if [ "$(cfg backup 1)" = 1 ]; then
     backup_tiers | while read -r tier n; do
         case "$tier" in new) t=最新 ;; 2d) t=近两天 ;; day) t=每天 ;; week) t=每周 ;; month) t=每月 ;; pre) t=恢复前 ;; *) t=多余 ;; esac
         v=""; [ -s "$(bdir)/$n.sha256" ] && v="，已校验"
-        echo "  $n（$t，$(human_kb "$(du -k "$(bdir)/$n" 2>/dev/null | cut -f1)")$v）"
+        echo "  ${n}（${t}，$(human_kb "$(du -k "$(bdir)/$n" 2>/dev/null | cut -f1)")${v}）"
     done
     [ -n "$(list_backups | head -n 1)" ] || echo "  还没有备份"
 else

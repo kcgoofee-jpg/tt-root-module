@@ -7,7 +7,7 @@ TEST_BIN=$(mktemp -d "${TMPDIR:-/tmp}/tt-ka-bin.XXXXXX") || exit 1; export TEST_
 trap 'rm -rf "$TEST_BIN"' EXIT
 rc=0
 for s in dash sh ksh; do
-    command -v "$s" >/dev/null 2>&1 || { echo "== $s：没装，跳过"; continue; }
+    command -v "$s" >/dev/null 2>&1 || { echo "== ${s}：没装，跳过"; continue; }
     echo "== $s"
     "$s" ./cases.sh || rc=1
 done

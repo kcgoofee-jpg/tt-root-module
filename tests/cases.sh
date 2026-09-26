@@ -1,6 +1,6 @@
 # 单元测试的用例：由 tests/run.sh 用 dash / sh / ksh 各跑一遍（手机上是 busybox ash 或 mksh）。
 # 用 PATH 里的假命令代替 dumpsys / cmd / am / pm / pidof / su / getprop / stat / date / sleep / logcat，
-# 它们按 FAKE_* 环境变量回答，改动类命令记到 $CALLS。模块脚本本身不改一行地被测。
+# 它们按 FAKE_* 环境变量回答，改动类命令记到 ${CALLS}。模块脚本本身不改一行地被测。
 set -u
 HERE=${TESTS_DIR:?}
 MOD=$HERE/../ksu-tt-keepalive
@@ -754,7 +754,7 @@ check "今天统计" 'echo "$out" | grep -q "今天：生成 2 次，共 5 分�
 check "7 天表" 'echo "$out" | grep -q "^01-01 .* 2 .*5 分 .*3(1)"'
 check "退出原因汇总" 'echo "$out" | grep -q "2 内存不足，被系统回收$"'
 check "汇总里强制停止不带括号" 'echo "$out" | grep -q "1 强制停止$"'
-check "备份一栏" 'echo "$out" | grep -q "还没有备份" && echo "$out" | grep -q "位置：$PRIVATE_BK（只有 root 能读"'
+check "备份一栏" 'echo "$out" | grep -q "还没有备份" && echo "$out" | grep -q "位置：${PRIVATE_BK}（只有 root 能读"'
 check "开关一栏" 'echo "$out" | grep -q "备份 1，私密位置 1，自动重开 1，通知 1" && echo "$out" | grep -q "清理 TT 30 天以前的日志（0 = 不清理），温度提醒 45°C（0 = 不提醒），3 天没拷到电脑提醒"'
 check "温度" 'echo "$out" | grep -q "温度：电池 36°C，处理器 38°C，主板 —°C"'
 check "版本" 'echo "$out" | grep -q "TT 版本：2.3.0；系统浏览器内核：com.google.android.webview, 153.0.8010.36"'
@@ -976,5 +976,5 @@ while [ $i -lt 50 ] && [ -d "$PRIVATE_BK" ]; do "$REAL_SLEEP" 0.1; i=$((i + 1));
 check "卸载：副本移到共享位置" '[ -f "$SHARED_BK/实时副本/tt/default-user/chats/角色 A/1.jsonl" ] && [ ! -d "$PRIVATE_BK" ]'
 
 pass=$(cat "$T/pass" 2>/dev/null | wc -l | tr -d " "); failn=$(cat "$T/fail" 2>/dev/null | wc -l | tr -d " ")
-echo "通过 $pass，失败 $failn"
+echo "通过 ${pass}，失败 $failn"
 [ "$failn" = 0 ]

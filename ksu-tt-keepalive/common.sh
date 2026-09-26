@@ -243,7 +243,7 @@ exit_line() (
     IFS='|' read -r ts pid r s imp d <<EOF
 $1
 EOF
-    echo "TT（$pid）${ts#* } 退出：$(exit_reason_zh "$r" "$s")［$r${s:+ / $s}，重要度 $imp${d:+，$(echo "$d" | cut -c1-60)}］"
+    echo "TT（${pid}）${ts#* } 退出：$(exit_reason_zh "$r" "$s")［$r${s:+ / $s}，重要度 $imp${d:+，$(echo "$d" | cut -c1-60)}］"
 )
 
 # 比 state 里 last_exit 新的退出记录，旧的在前逐条输出（输出的是 exit_records 的原始行）
@@ -573,7 +573,7 @@ root_manager() (
     else
         echo 未识别; return
     fi
-    echo "$n${v:+（$v）}"
+    echo "$n${v:+（${v}）}"
 )
 
 # 某个温度传感器（/sys/class/thermal 里 type 等于 $1 的第一个）的整数 °C；读不到或读数不合理（没接的传感器
