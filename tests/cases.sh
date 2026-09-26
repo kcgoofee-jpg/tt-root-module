@@ -36,10 +36,13 @@ mk cmd 'case "$1 $2" in
 esac'
 mk am 'case "$1" in get-standby-bucket) echo "$FAKE_BUCKET" ;; *) echo "am $*" >> "$CALLS" ;; esac'
 mk logcat 'cat "$FAKE_LOGCAT" 2>/dev/null'
-mk pm '[ "$FAKE_INSTALLED" = 1 ]'
+mk pm 'case "$1" in
+  path) [ "$FAKE_INSTALLED" = 1 ] ;;
+  list) [ -n "$FAKE_PMUID" ] && echo "package:com.tauritavern.client uid:$FAKE_PMUID" ;;
+esac'
 mk pidof 'echo "$FAKE_PIDS"'
 mk su 'echo "su $*" >> "$CALLS"; [ "$1" = 2000 ] && [ "$2" = -c ] && eval "$3"'
-mk getprop 'echo 1'
+mk getprop 'case "$1" in sys.user.0.ce_available) echo "$FAKE_CE" ;; *) echo 1 ;; esac'
 mk stat 'echo 10447'
 mk sleep ':'
 # date：永远是 FAKE_NOW 那一刻；支持 date -d @秒数（Mac 的 date 用 -r，手机上的用 -d）
@@ -48,7 +51,7 @@ t=$FAKE_NOW; [ "${1:-}" = -d ] && { t=${2#@}; shift 2; }
 if "$REAL_DATE" -r 0 +%s >/dev/null 2>&1; then exec "$REAL_DATE" -r "$t" "$@"; else exec "$REAL_DATE" -d "@$t" "$@"; fi'
 export PATH="$BIN:$PATH" FIX CALLS=$T/calls
 export FAKE_WL=no FAKE_GEN=0 FAKE_EXIT=$FIX/exit-info.txt FAKE_RAIB=default FAKE_BUCKET=5 FAKE_INSTALLED=1 FAKE_PIDS="" FAKE_NOW=1000
-export FAKE_VER=2.3.0 FAKE_NET=NONE FAKE_LOGCAT=/nonexistent
+export FAKE_VER=2.3.0 FAKE_NET=NONE FAKE_LOGCAT=/nonexistent FAKE_CE=true FAKE_PMUID=""
 DAY0=86400   # 1970-01-02 00:00 UTC，按天算的用例从这里开始
 
 newmod() {   # 新建一个空的模块目录（放进脚本），设好环境
@@ -266,6 +269,10 @@ newmod 25; ( load
 
 echo "[1.4] TT 升级、重装"
 newmod 26; ( load
+    FAKE_PMUID=10500
+    check "uid 先用 pm 查（没解锁也能查到）" '[ "$(app_uid)" = 10500 ]'
+    FAKE_PMUID=""
+    check "pm 查不到再用 stat" '[ "$(app_uid)" = 10447 ]'
     FAKE_WL=yes FAKE_RAIB=allow
     ensure
     check "第一次只记下不报" '! grep -q "TT 版本" "$LOG" && [ "$(state_get tt_version)" = 2.3.0 ]'
@@ -281,6 +288,10 @@ newmod 27; ( load
     U=$TT_DATA/default-user; mkdir -p "$U/chats/角色 A" "$U/backups" "$U/thumbnails" "$U/OpenAI Settings"
     echo hi > "$U/chats/角色 A/1.jsonl"; echo '{"api_key":"sk-SECRET"}' > "$U/secrets.json"
     echo old > "$U/backups/x"; mkdir -p "$U/.staging"; echo w > "$U/.staging/w"; echo t > "$U/thumbnails/t"; echo s > "$U/settings.json"; echo p > "$U/OpenAI Settings/p.json"
+    FAKE_CE=false FAKE_PIDS=9 FAKE_GEN=0 FAKE_NOW=$((DAY0 - 100)); tick
+    check "开机后没解锁不备份" '[ -z "$(ls "$BACKUP_DIR" 2>/dev/null)" ]'
+    check "没解锁不算失败" '! grep -q "备份 TT 数据失败" "$LOG" 2>/dev/null && [ -z "$(state_get backup_try)" ]'
+    FAKE_CE=true
     FAKE_PIDS=9 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
     check "生成中不备份" '[ -z "$(ls "$BACKUP_DIR" 2>/dev/null)" ]'
     FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick

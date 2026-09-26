@@ -70,7 +70,15 @@ state_set() {
     { grep -v "^$1=" "$STATE" 2>/dev/null; echo "$1=$2"; } > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 }
 
-app_uid() { stat -c %u "/data/data/$PKG" 2>/dev/null; }
+# TT 的 uid。pm 在开机后、第一次解锁前也能查到；/data/data 要解锁后才读得到，只作后备
+app_uid() {
+    u=$(pm list packages -U "$PKG" 2>/dev/null | sed -n "s/^package:$PKG uid:\([0-9]*\).*/\1/p" | head -1)
+    [ -n "$u" ] || u=$(stat -c %u "/data/data/$PKG" 2>/dev/null)
+    echo "$u"
+}
+
+# 开机后第一次解锁手机之前，应用的数据（包括内部存储）是加密的，读不到
+unlocked() { [ "$(getprop sys.user.0.ce_available)" = true ]; }
 
 appop_mode() {   # 输出 allow / ignore / deny / default …
     m=$(cmd appops get "$PKG" "$1" 2>/dev/null | sed -n "s/^$1: \([a-z_]*\).*/\1/p" | head -1)

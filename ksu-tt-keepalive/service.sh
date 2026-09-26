@@ -159,7 +159,7 @@ check_quota() {
 # 每天备份一次（生成中不备份；失败 1 小时后再试）
 maybe_backup() {
     [ "$(cfg backup 1)" = 1 ] || return
-    [ "$installed" = yes ] && [ "$gen" = 0 ] || return
+    [ "$installed" = yes ] && [ "$gen" = 0 ] && unlocked || return
     last=$(state_get last_backup); last=${last:-0}
     tried=$(state_get backup_try); tried=${tried:-0}
     [ $((now - last)) -ge 86400 ] && [ $((now - tried)) -ge 3600 ] || return
