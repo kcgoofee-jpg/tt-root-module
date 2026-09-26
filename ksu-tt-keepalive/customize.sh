@@ -13,9 +13,10 @@ elif [ -d "$OLD" ]; then
         echo "RUN_ANY_IN_BACKGROUND=default"
     } > "$MODPATH/prior.txt"
 fi
-for f in state.txt stats.txt config.txt; do
+for f in state.txt stats.txt config.txt backup.marker; do
     [ -f "$OLD/$f" ] && cp -f "$OLD/$f" "$MODPATH/$f"
 done
 [ -f "$OLD/service.log" ] && cp -f "$OLD/service.log" "$MODPATH/service.log"
 ui_print "- 只针对 com.tauritavern.client；重启后生效"
-ui_print "- 每天备份 TT 数据到 内部存储/Documents/TauriTavern-backup（不含 API 密钥）"
+ui_print "- 自动备份 TT 数据（不含 API 密钥），默认放在只有 root 能读的 /data/adb/tt-backups"
+ui_print "- 在 KernelSU 管理器里点本模块，可以打开它的界面"

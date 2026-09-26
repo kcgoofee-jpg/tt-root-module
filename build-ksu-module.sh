@@ -4,11 +4,11 @@
 # KernelSU 直接用；也带了 Magisk 要的 META-INF（按 Magisk 文档写的安装器，Magisk 上没实测过）。
 set -e
 HERE=${0:A:h}
-FILES=(module.prop common.sh service.sh uninstall.sh action.sh customize.sh restore.sh
+FILES=(module.prop common.sh service.sh uninstall.sh action.sh customize.sh restore.sh ui.sh retention.awk webroot/index.html
        META-INF/com/google/android/update-binary META-INF/com/google/android/updater-script)
 cd "$HERE/ksu-tt-keepalive"
 v=$(sed -n "s/^version=//p" module.prop)
-for f in ${FILES[@]:#*.prop}; do [[ $f == *updater-script ]] || sh -n "$f"; done
+for f in ${(M)FILES:#*.sh} META-INF/com/google/android/update-binary; do sh -n "$f"; done
 sh "$HERE/tests/run.sh" > /dev/null || { print -u2 "单元测试没通过：sh tests/run.sh 看详情"; exit 1; }
 out="$HERE/dist"; mkdir -p "$out"
 rm -f "$out/claudemax-tt-keepalive-$v.zip"

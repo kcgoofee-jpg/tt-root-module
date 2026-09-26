@@ -51,16 +51,24 @@ echo "== 最近 3 次 TT 退出（系统记录）=="
 exit_records | head -n 3 | while IFS= read -r rec; do exit_line "$rec"; done
 echo "== 备份 =="
 if [ "$(cfg backup 1)" = 1 ]; then
-    n=$(ls "$BACKUP_DIR"/tt-default-user-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
-    newest=$(ls "$BACKUP_DIR"/tt-default-user-*.tar.gz 2>/dev/null | sort | tail -n 1)
-    echo "每天一次，留 $(cfg backup_keep 7) 份；现有 $n 份${newest:+，最新 ${newest##*/}}"
-    echo "位置：内部存储/Documents/TauriTavern-backup（不含 API 密钥）"
+    now=$(date +%s)
+    lb=$(state_get last_backup); ck=$(state_get last_backup_check); mp=$(state_get mac_pulled)
+    ago() { [ -n "$1" ] && echo "$(human_secs $((now - $1)))前" || echo "还没有"; }
+    echo "最近一次备份：$(ago "$lb")；最近确认数据没变：$(ago "$ck")；最近拷到电脑：$(ago "$mp")"
+    echo "有变化时最多每 $(cfg backup_hours 6) 小时一次；保留 $(cfg keep_days 7) 天 / $(cfg keep_weeks 4) 周 / $(cfg keep_months 6) 个月"
+    echo "位置：$(bdir)（$([ "$(cfg backup_private 1)" = 0 ] && echo "文件管理器能看到" || echo "只有 root 能读")，不含 API 密钥）"
+    backup_tiers | while read -r tier n; do
+        case "$tier" in new) t=最新 ;; 2d) t=近两天 ;; day) t=每天 ;; week) t=每周 ;; month) t=每月 ;; *) t=多余 ;; esac
+        v=""; [ -s "$(bdir)/$n.sha256" ] && v="，已校验"
+        echo "  $n（$t，$(human_kb "$(du -k "$(bdir)/$n" 2>/dev/null | cut -f1)")$v）"
+    done
+    [ -n "$(list_backups | head -n 1)" ] || echo "  还没有备份"
 else
     echo "已关（config.txt 里 backup=0）"
 fi
-echo "== 开关（模块目录的 config.txt）=="
-echo "备份 $(cfg backup 1)（留 $(cfg backup_keep 7) 份），自动重开 $(cfg auto_reopen 1)，通知 $(cfg notify 1)（1 开 0 关）"
-echo "清理 TT $(cfg cleanup_days 30) 天以前的日志（0 = 不清理），温度提醒 $(cfg temp_alert 45)°C（0 = 不提醒）"
+echo "== 开关（模块目录的 config.txt，也可以在 KernelSU 里打开本模块的界面改）=="
+echo "备份 $(cfg backup 1)，私密位置 $(cfg backup_private 1)，自动重开 $(cfg auto_reopen 1)，通知 $(cfg notify 1)（1 开 0 关）"
+echo "清理 TT $(cfg cleanup_days 30) 天以前的日志（0 = 不清理），温度提醒 $(cfg temp_alert 45)°C（0 = 不提醒），$(cfg mac_alert_days 3) 天没拷到电脑提醒（0 = 不提醒）"
 [ -f "$PRIOR" ] && { echo "== 装模块前的原值（卸载时还原）=="; grep -v '^#' "$PRIOR"; }
 echo "== 最近的日志 =="
 tail -n 10 "$LOG" 2>/dev/null

@@ -15,7 +15,8 @@
 #      当天生成累计超过 5 小时提醒一次（Android 15 起这类前台服务每 24 小时最多约 6 小时）
 #   8. TT 升级、重装时记一行
 # 另外两件（config.txt 里可以关）：
-#   9. 每天备份一次 TT 的数据到 /sdcard/Documents/TauriTavern-backup（不含 API 密钥），留最近 7 份
+#   9. 备份 TT 的数据（不含 API 密钥）：有变化时最多每 6 小时一次，做完马上校验；按天 / 周 / 月分层保留；
+#      默认放在只有 root 能读的 /data/adb/tt-backups。连续失败 3 次、2 天没备份成功、3 天没拷到电脑都会提醒
 #  10. TT 生成回复到一半被「系统」杀掉（不是你划掉、不是强制停止）时，自动重新打开 TT，10 分钟内最多一次
 #  11. 每天清理一次 TT 自己 30 天以前的运行日志和错误记录
 #  12. 生成回复时手机太烫（电池 45°C 以上）提醒一次
@@ -33,30 +34,6 @@ SLOW=60      # TT 没在运行时
 CHECK=600    # 白名单 / 后台运行 / 待机分组的核对间隔
 QUOTA=18000  # 当天生成累计到这么多秒就提醒一次（5 小时）
 REOPEN_GAP=600
-
-DEFAULT_CONFIG='# TauriTavern 保活模块的开关（1 开 0 关）。改完不用重启，最多 1 分钟后生效。
-# 每天备份一次 TT 的数据到 /sdcard/Documents/TauriTavern-backup（不含 API 密钥）
-backup=1
-# 备份留几份
-backup_keep=7
-# 生成回复到一半被系统杀掉时，自动重新打开 TT
-auto_reopen=1
-# 出事时发通知
-notify=1
-# 清理 TT 自己多少天以前的运行日志和错误记录（0 = 不清理）
-cleanup_days=30
-# 生成回复时电池温度到多少度提醒（0 = 不提醒）
-temp_alert=45'
-
-# 旧版本升级上来的 config.txt 里没有的新开关，按默认值补上（已有的不动）
-config_fill() {
-    echo "$DEFAULT_CONFIG" | grep -E '^[a-z_]+=' | while IFS= read -r line; do
-        k=${line%%=*}
-        grep -q "^$k=" "$CONFIG" 2>/dev/null && continue
-        echo "$DEFAULT_CONFIG" | grep -B1 "^$k=" | head -n 1 | grep '^#' >> "$CONFIG"
-        echo "$line" >> "$CONFIG"
-    done
-}
 
 # 第一次运行（装上后第一次开机）：记下改之前的原值，卸载时还原成它
 record_prior() {
@@ -182,21 +159,51 @@ check_quota() {
     alert "TT 今天生成已累计 $(human_secs "$secs")" "Android 限制这类后台生成每 24 小时约 6 小时，超过后 TT 在后台可能停住，放前台就没事。"
 }
 
-# 每天备份一次（生成中不备份；失败 1 小时后再试）
+# 备份：TT 数据有变化、离上次够 backup_hours 小时、没在生成、手机解锁过，才备份；失败 1 小时后再试
 maybe_backup() {
     [ "$(cfg backup 1)" = 1 ] || return
     [ "$installed" = yes ] && [ "$gen" = 0 ] && unlocked || return
-    last=$(state_get last_backup); last=${last:-0}
+    hrs=$(cfg backup_hours 6); [ "$hrs" -ge 1 ] 2>/dev/null || hrs=6
+    lb=$(state_get last_backup); lb=${lb:-0}
+    chk=$(state_get last_backup_check); chk=${chk:-0}
     tried=$(state_get backup_try); tried=${tried:-0}
-    [ $((now - last)) -ge 86400 ] && [ $((now - tried)) -ge 3600 ] || return
+    [ $((now - lb)) -ge $((hrs * 3600)) ] && [ $((now - chk)) -ge $((hrs * 3600)) ] \
+        && [ $((now - tried)) -ge 3600 ] || return
+    if ! data_changed; then
+        state_set last_backup_check "$now"     # 数据没变，现有的备份就是最新的
+        return
+    fi
     state_set backup_try "$now"
     if bf=$(backup_now); then
-        state_set last_backup "$now"
+        state_set last_backup "$now"; state_set last_backup_check "$now"; state_set backup_fails 0
         kb=$(du -k "$bf" 2>/dev/null | cut -f1)
-        prune_backups "$(cfg backup_keep 7)"
-        log "已备份 TT 数据：${bf##*/}（$kb KB，不含 API 密钥）"
+        dropped=$(apply_retention | wc -l | tr -d ' ')
+        extra=""; [ "$dropped" -gt 0 ] 2>/dev/null && extra="；按分层保留清掉 $dropped 份旧的"
+        log "已备份并校验 TT 数据：${bf##*/}（$kb KB，不含 API 密钥）$extra"
     else
-        log "备份 TT 数据失败，1 小时后再试"
+        fails=$(( $(state_get backup_fails) + 1 )); state_set backup_fails "$fails"
+        log "备份 TT 数据失败（连续第 $fails 次），1 小时后再试"
+        [ "$fails" = 3 ] && alert "TT 备份连续失败 3 次" "在 KernelSU 里打开本模块的界面看看；先看手机空间够不够。"
+    fi
+}
+
+# 备份太久没成功、太久没拷到电脑：每天最多各提醒一次
+check_stale() {
+    [ "$(cfg backup 1)" = 1 ] && [ "$installed" = yes ] && unlocked || return
+    since=$(state_get watch_since); since=${since:-$now}
+    ok=$(state_get last_backup_check); ok=${ok:-$since}
+    if [ $((now - ok)) -ge 172800 ] && [ "$(state_get stale_day)" != "$day" ]; then
+        state_set stale_day "$day"
+        log "已经 $(( (now - ok) / 86400 )) 天没备份成功了"
+        alert "TT 已经 $(( (now - ok) / 86400 )) 天没备份成功了" "在 KernelSU 里打开本模块的界面看看原因。"
+    fi
+    md=$(cfg mac_alert_days 3)
+    [ "$md" -gt 0 ] 2>/dev/null && [ -n "$(list_backups | head -n 1)" ] || return
+    mp=$(state_get mac_pulled); mp=${mp:-$since}
+    if [ $((now - mp)) -ge $((md * 86400)) ] && [ "$(state_get macstale_day)" != "$day" ]; then
+        state_set macstale_day "$day"
+        log "已经 $(( (now - mp) / 86400 )) 天没把备份拷到电脑"
+        alert "已经 $(( (now - mp) / 86400 )) 天没把备份拷到电脑" "手机丢了或坏了，只在手机上的备份也会没。连上电脑（数据线或无线调试），电脑会自动拷。"
     fi
 }
 
@@ -277,7 +284,15 @@ temp_alerted=""; temp_alerted=""; gen_start=$now; fi
 
     [ "$gen" = 1 ] && check_temp
 
+    # 备份位置改过（或从 1.5 升级上来）：把已有的备份搬到现在的位置。要等手机解锁
+    if [ -z "$migrated" ] && unlocked; then
+        migrated=1
+        mv_n=$(migrate_backups)
+        [ "$mv_n" -gt 0 ] 2>/dev/null && log "把 $mv_n 个备份文件搬到了 $(bdir)"
+    fi
+
     maybe_backup
+    check_stale
     maybe_cleanup
 
     gen_prev=$gen
@@ -293,8 +308,8 @@ main() {
         first=$(exit_records | head -n 1 | cut -d'|' -f1)
         state_set last_exit "${first:-0}"
     fi
-    [ -f "$CONFIG" ] || echo "$DEFAULT_CONFIG" > "$CONFIG"
     config_fill
+    [ -n "$(state_get watch_since)" ] || state_set watch_since "$(date +%s)"
     log "开始运行（版本 $(sed -n 's/^version=//p' "$MODDIR/module.prop")）"
     while true; do
         tick
@@ -314,4 +329,5 @@ gen_start=""
 frozen_since=""
 last_reopen=0
 last_day=""
+migrated=""
 [ "${TT_KEEPALIVE_TEST:-}" = 1 ] || main

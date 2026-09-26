@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>TT 守护</title>
+<!-- KernelSU 管理器里本模块的界面。全部内联，不联网；命令都经 ksu.exec 调 ui.sh（root）。
+     在普通浏览器里打开时没有 ksu，用演示数据，方便看样子。 -->
+<style>
+:root {
+  --bg: #f5f3ee; --surface: #fffefb; --surface-2: #f0ede6; --text: #1f1e1b; --muted: #6d6a63; --faint: #9a968d;
+  --line: #e6e2d9; --accent: #2d6a58; --accent-ink: #ffffff; --accent-soft: #e2eee8; --accent-line: #b9d6c9;
+  --warn: #a8620c; --warn-soft: #fbf0dc; --warn-line: #efd3a4; --danger: #b3261e; --danger-soft: #fbe5e2; --danger-line: #f0bdb7;
+  --chart: #2d6a58; --chart-2: #c9a36b; --shadow: 0 1px 2px rgba(40, 35, 25, .05), 0 4px 16px rgba(40, 35, 25, .05);
+  --radius: 18px; --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111312; --surface: #1a1d1b; --surface-2: #222623; --text: #ecebe5; --muted: #a09e96; --faint: #75736c;
+    --line: #2b302d; --accent: #7fc6aa; --accent-ink: #0f1a15; --accent-soft: #1d2d26; --accent-line: #2f4d40;
+    --warn: #f0b25a; --warn-soft: #2f2517; --warn-line: #54401f; --danger: #f28b80; --danger-soft: #361e1c; --danger-line: #5a2d29;
+    --chart: #7fc6aa; --chart-2: #d6b27a; --shadow: none;
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body {
+  font: 15px/1.55 -apple-system, "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", system-ui, sans-serif;
+  padding: max(16px, env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 560px; margin: 0 auto; }
+button { font: inherit; color: inherit; }
+
+/* 顶部 */
+.top { display: flex; align-items: center; gap: 12px; margin: 4px 2px 18px; }
+.mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); flex: none; }
+.mark svg { width: 22px; height: 22px; }
+.top h1 { font-size: 20px; line-height: 1.2; margin: 0; letter-spacing: .01em; }
+.top p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.top .spacer { flex: 1; }
+.iconbtn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; cursor: pointer; }
+.iconbtn svg { width: 18px; height: 18px; color: var(--muted); }
+.iconbtn.spin svg { animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 总览 */
+.hero { border-radius: 24px; padding: 20px; background: var(--surface); box-shadow: var(--shadow); border: 1px solid var(--line); }
+.verdict { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); flex: none; }
+.hero.warn .dot { background: var(--warn); box-shadow: 0 0 0 5px var(--warn-soft); }
+.hero.bad .dot { background: var(--danger); box-shadow: 0 0 0 5px var(--danger-soft); }
+.verdict small { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: auto; }
+.metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+.metric { background: var(--surface-2); border-radius: 14px; padding: 12px; min-width: 0; }
+.metric .k { font-size: 12px; color: var(--muted); }
+.metric .v { font-size: 17px; font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.metric .s { font-size: 12px; color: var(--faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.metric.ok .s { color: var(--accent); }
+.metric.warn .v, .metric.warn .s { color: var(--warn); }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.btn { min-height: 48px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: 15px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; }
+.btn svg { width: 18px; height: 18px; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.btn.danger { background: var(--danger); color: #fff; border-color: transparent; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn:active:not(:disabled) { transform: scale(.98); }
+
+/* 提醒 */
+.alerts { display: grid; gap: 8px; margin-top: 14px; }
+.alerts:empty { display: none; }
+.alert { display: flex; gap: 10px; padding: 12px 14px; border-radius: 14px; background: var(--warn-soft); border: 1px solid var(--warn-line); font-size: 14px; }
+.alert.bad { background: var(--danger-soft); border-color: var(--danger-line); }
+.alert.info { background: var(--accent-soft); border-color: var(--accent-line); }
+.alert svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--warn); }
+.alert.bad svg { color: var(--danger); } .alert.info svg { color: var(--accent); }
+.alert b { display: block; font-weight: 600; }
+.alert span { color: var(--muted); font-size: 13px; }
+
+/* 卡片 */
+.section { margin-top: 26px; }
+.section > h2 { font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .06em; margin: 0 4px 10px; display: flex; align-items: baseline; gap: 8px; }
+.section > h2 .aside { margin-left: auto; font-weight: 400; letter-spacing: 0; color: var(--faint); font-size: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.row { display: flex; align-items: center; gap: 12px; padding: 13px 16px; min-height: 52px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row .main { flex: 1; min-width: 0; }
+.row .title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .sub { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+.row .end { color: var(--muted); font-size: 13px; text-align: right; flex: none; }
+.row.tap { cursor: pointer; }
+.row.tap:active { background: var(--surface-2); }
+.chev { width: 16px; height: 16px; color: var(--faint); flex: none; }
+.chip { display: inline-block; font-size: 11.5px; line-height: 20px; padding: 0 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-weight: 600; margin-right: 6px; vertical-align: 1px; }
+.chip.new { background: var(--accent-soft); color: var(--accent); }
+.ok-ic { color: var(--accent); } .warn-ic { color: var(--warn); }
+.empty { padding: 22px 16px; color: var(--muted); text-align: center; font-size: 14px; }
+.more { width: 100%; border: 0; border-top: 1px solid var(--line); background: none; padding: 12px; color: var(--accent); font-weight: 600; cursor: pointer; }
+
+/* 保活小格 */
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); }
+.tile { background: var(--surface); padding: 14px 16px; min-width: 0; }
+.tile .k { font-size: 12px; color: var(--muted); }
+.tile .v { font-size: 15px; font-weight: 600; margin-top: 3px; display: flex; align-items: center; gap: 6px; }
+.tile .v i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.tile.warn .v i { background: var(--warn); } .tile.bad .v i { background: var(--danger); } .tile.idle .v i { background: var(--faint); }
+
+/* 图表 */
+.chart { padding: 16px 16px 12px; }
+.chart svg { display: block; width: 100%; height: 150px; }
+.chart .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+.chart .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); }
+.stats div { padding: 12px 8px; text-align: center; }
+.stats div + div { border-left: 1px solid var(--line); }
+.stats b { display: block; font-size: 18px; }
+.stats span { font-size: 11.5px; color: var(--muted); }
+
+/* 空间 */
+.bar { display: flex; height: 10px; border-radius: 99px; overflow: hidden; background: var(--surface-2); margin: 14px 16px 10px; }
+.bar i { display: block; height: 100%; }
+.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; padding: 0 16px 14px; font-size: 13px; }
+.keys div { display: flex; align-items: center; gap: 8px; color: var(--muted); white-space: nowrap; min-width: 0; }
+.keys b { margin-left: auto; color: var(--text); font-weight: 600; }
+.keys i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+/* 开关 */
+.switch { position: relative; width: 50px; height: 30px; flex: none; }
+.switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.switch span { position: absolute; inset: 0; border-radius: 99px; background: var(--line); transition: background .2s; pointer-events: none; }
+.switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .2s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(20px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stepper { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
+.stepper button { width: 38px; height: 36px; border: 0; background: var(--surface-2); font-size: 18px; cursor: pointer; color: var(--text); }
+.stepper output { min-width: 52px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 14px; }
+
+/* 日志 */
+.log { font: 12px/1.6 var(--mono); padding: 12px 16px; max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
+.log .t { color: var(--faint); }
+.log .hl { color: var(--text); }
+
+.foot { text-align: center; color: var(--faint); font-size: 12px; margin-top: 30px; line-height: 1.8; }
+
+/* 底部弹层 */
+.scrim { position: fixed; inset: 0; background: rgba(15, 14, 12, .45); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 11; background: var(--surface); border-radius: 24px 24px 0 0; padding: 10px 20px calc(20px + env(safe-area-inset-bottom)); transform: translateY(105%); transition: transform .25s cubic-bezier(.2,.8,.2,1); max-height: 88vh; overflow: auto; max-width: 600px; margin: 0 auto; }
+.open .scrim { opacity: 1; pointer-events: auto; }
+.open .sheet { transform: none; }
+.grab { width: 38px; height: 5px; border-radius: 9px; background: var(--line); margin: 0 auto 14px; }
+.sheet h3 { margin: 0 0 4px; font-size: 19px; }
+.sheet .lead { color: var(--muted); margin: 0 0 14px; font-size: 14px; word-break: break-all; }
+.steps { margin: 0 0 16px; padding: 0; list-style: none; display: grid; gap: 10px; }
+.steps li { display: flex; gap: 10px; font-size: 14px; }
+.steps li svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--accent); }
+.sheet .btns { display: grid; gap: 10px; }
+.result { border-radius: 14px; padding: 12px 14px; font-size: 14px; margin-bottom: 14px; white-space: pre-wrap; }
+.result.ok { background: var(--accent-soft); } .result.bad { background: var(--danger-soft); } .result.warn { background: var(--warn-soft); }
+
+.toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; opacity: 0; transition: .2s; z-index: 20; max-width: calc(100% - 32px); }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.skeleton { color: transparent !important; background: linear-gradient(90deg, var(--surface-2), var(--line), var(--surface-2)); background-size: 200% 100%; animation: sh 1.2s infinite; border-radius: 6px; }
+@keyframes sh { to { background-position: -200% 0; } }
+.demo { text-align: center; font-size: 12px; color: var(--warn); margin: -8px 0 12px; }
+.btn { white-space: nowrap; }
+/* 小屏（360 以下）：三个小格改成一行一个，两个按钮上下排 */
+@media (max-width: 380px) {
+  body { padding-left: 12px; padding-right: 12px; }
+  .hero { padding: 16px; }
+  .metrics { grid-template-columns: 1fr; gap: 6px; }
+  .metric { display: grid; grid-template-columns: auto 1fr; align-items: baseline; column-gap: 12px; padding: 10px 12px; }
+  .metric .k { grid-row: span 2; align-self: center; min-width: 5.5em; }
+  .metric .v { font-size: 16px; margin: 0; text-align: right; }
+  .metric .s { text-align: right; }
+  .actions { grid-template-columns: 1fr; }
+  .grid { grid-template-columns: 1fr 1fr; }
+  .stats b { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header class="top">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+    </div>
+    <div>
+      <h1>TT 守护</h1>
+      <p>TauriTavern 保活 · 备份</p>
+    </div>
+    <div class="spacer"></div>
+    <button class="iconbtn" id="refresh" aria-label="刷新">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+    </button>
+  </header>
+  <div class="demo" id="demo" hidden>这是演示数据：在 KernelSU 管理器里打开本模块才是你手机上的真实状态</div>
+
+  <section class="hero" id="hero">
+    <div class="verdict"><span class="dot"></span><span id="verdict" class="skeleton">正在读取状态</span><small id="updated"></small></div>
+    <div class="metrics">
+      <div class="metric" id="m-backup"><div class="k">最近备份</div><div class="v skeleton">——</div><div class="s">&nbsp;</div></div>
+      <div class="metric" id="m-mac"><div class="k">拷到电脑</div><div class="v skeleton">——</div><div class="s">&nbsp;</div></div>
+      <div class="metric" id="m-tt"><div class="k">TauriTavern</div><div class="v skeleton">——</div><div class="s">&nbsp;</div></div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="btn-backup">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+        立即备份
+      </button>
+      <button class="btn" id="btn-restore">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
+        从备份恢复
+      </button>
+    </div>
+    <div class="alerts" id="alerts"></div>
+  </section>
+
+  <section class="section">
+    <h2>备份 <span class="aside" id="backup-aside"></span></h2>
+    <div class="card" id="backups"><div class="empty skeleton">读取中</div></div>
+  </section>
+
+  <section class="section">
+    <h2>保活状态</h2>
+    <div class="card"><div class="grid" id="keep"></div></div>
+  </section>
+
+  <section class="section">
+    <h2>最近 7 天 <span class="aside">每天生成回复的时长</span></h2>
+    <div class="card">
+      <div class="chart"><svg id="chart" role="img" aria-label="最近 7 天每天生成回复的分钟数"></svg>
+        <div class="legend"><span><i style="background:var(--chart)"></i>生成时长（分钟）</span><span><i style="background:var(--chart-2)"></i>当天被冻结过</span></div>
+      </div>
+      <div class="stats" id="today"></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>TT 为什么停过 <span class="aside">最近 7 天</span></h2>
+    <div class="card" id="reasons"></div>
+  </section>
+
+  <section class="section">
+    <h2>占用空间</h2>
+    <div class="card" id="space"></div>
+  </section>
+
+  <section class="section">
+    <h2>设置 <span class="aside">改了马上生效，不用重启</span></h2>
+    <div class="card" id="settings"></div>
+  </section>
+
+  <section class="section">
+    <h2>日志 <span class="aside">新的在上</span></h2>
+    <div class="card"><div class="log" id="log"></div></div>
+  </section>
+
+  <p class="foot" id="foot">不联网 · 备份只在你的手机和电脑上 · API 密钥不进备份</p>
+</div>
+
+<div id="sheetbox">
+  <div class="scrim" id="scrim"></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"></div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+"use strict";
+const MOD = "/data/adb/modules/claudemax_tt_keepalive";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const IC = {
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2L12 3z"/><path d="M12 10v4"/><path d="M12 17.5v.5"/></svg>',
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.5"/></svg>',
+  chev: '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/></svg>',
+};
+
+/* ---------- 调命令（KernelSU 的 ksu.exec；没有就用演示数据） ---------- */
+const HAS_KSU = typeof window.ksu !== "undefined" && typeof window.ksu.exec === "function";
+let cbSeq = 0;
+function exec(cmd) {
+  return new Promise((resolve, reject) => {
+    const name = `__tt_cb_${Date.now()}_${cbSeq++}`;
+    window[name] = (errno, stdout, stderr) => { delete window[name]; resolve({ errno, stdout, stderr }); };
+    try { window.ksu.exec(cmd, "{}", name); } catch (e) { delete window[name]; reject(e); }
+  });
+}
+async function ui(args) {
+  if (!HAS_KSU) return demo(args);
+  const r = await exec(`sh ${MOD}/ui.sh ${args}`);
+  try { return JSON.parse(r.stdout); } catch { throw new Error((r.stderr || r.stdout || "没有输出").slice(0, 200)); }
+}
+function toast(msg) {
+  if (HAS_KSU && window.ksu.toast) { try { window.ksu.toast(msg); return; } catch {} }
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+/* ---------- 文字 ---------- */
+function ago(ts, now) {
+  if (!ts) return null;
+  const s = Math.max(0, now - ts);
+  if (s < 90) return "刚刚";
+  if (s < 3600) return `${Math.round(s / 60)} 分钟前`;
+  if (s < 86400 * 2) return `${Math.round(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+}
+const kb = (k) => k == null ? "—" : k >= 1048576 ? `${(k / 1048576).toFixed(1)} GB` : k >= 1024 ? `${(k / 1024).toFixed(1)} MB` : `${k} KB`;
+const mins = (s) => s >= 3600 ? `${Math.floor(s / 3600)} 小时 ${Math.round((s % 3600) / 60)} 分` : `${Math.round(s / 60)} 分钟`;
+const TIER = { new: "最新", "2d": "近两天", day: "每天", week: "每周", month: "每月", drop: "多余" };
+function backupWhen(name) {
+  const m = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/.exec(name);
+  return m ? `${+m[2]} 月 ${+m[3]} 日 ${m[4]}:${m[5]}` : name;
+}
+const BUCKET = { 5: "豁免（最好）", 10: "活跃", 20: "常用", 30: "偶尔", 40: "很少", 45: "受限" };
+
+/* ---------- 画 ---------- */
+let S = null;
+function alertsOf(d) {
+  const a = [], now = d.now, c = d.config, b = d.backup;
+  const since = b.check || b.last || b.watch_since;
+  if (!c.backup) a.push(["bad", "自动备份关着", "在下面「设置」里打开。"]);
+  else if (b.fails >= 3) a.push(["bad", `备份连续失败 ${b.fails} 次`, "先看看手机存储空间够不够；也可以点「立即备份」看报什么错。"]);
+  else if (since && now - since > 172800) a.push(["bad", `已经 ${Math.floor((now - since) / 86400)} 天没备份成功`, "手机开机后要解锁一次，备份才会开始。"]);
+  else if (!b.items.length) a.push(["warn", "还没有备份", "点「立即备份」马上做一份。"]);
+  const mp = b.mac_pulled || b.watch_since;
+  if (c.mac_alert_days && b.items.length && mp && now - mp > c.mac_alert_days * 86400)
+    a.push(["warn", b.mac_pulled ? `${Math.floor((now - mp) / 86400)} 天没拷到电脑` : "备份还没拷到过电脑", "手机丢了或坏了，只在手机上的备份也会没。连上电脑（数据线或无线调试），电脑会自动拷。"]);
+  if (d.tt.installed && !d.keep.whitelist) a.push(["warn", "TT 不在电池优化白名单里", "模块 10 分钟内会自动补上。"]);
+  if (d.tt.running && d.keep.network && d.keep.network !== "NONE") a.push(["warn", "TT 的网络被系统限制了", `限制：${d.keep.network}`]);
+  if (d.keep.temp != null && c.temp_alert && d.keep.temp >= c.temp_alert) a.push(["warn", `手机有点烫：${d.keep.temp}°C`, "放下歇一会儿，别边充电边用。"]);
+  if (d.crashes) a.push(["info", `存着 ${d.crashes} 份崩溃记录`, "电脑上的「安卓保活模块」菜单会拷回电脑，方便查原因。"]);
+  if (!d.tt.installed) a.push(["bad", "没找到 TauriTavern", "装上 TT 后模块会自动开始工作。"]);
+  return a;
+}
+
+function render(d) {
+  S = d;
+  const now = d.now, b = d.backup, c = d.config;
+  const al = alertsOf(d);
+  const worst = al.some((x) => x[0] === "bad") ? "bad" : al.some((x) => x[0] === "warn") ? "warn" : "";
+  $("#hero").className = "hero " + worst;
+  const v = $("#verdict"); v.classList.remove("skeleton");
+  v.textContent = worst === "bad" ? "需要处理" : worst === "warn" ? `有 ${al.filter((x) => x[0] !== "info").length} 条提醒` : "一切正常";
+  $("#updated").textContent = `v${d.version} · ${new Date(now * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+
+  const latest = b.items[0];
+  const last = b.last || null, check = b.check || null;
+  metric("#m-backup", last ? ago(last, now) : "还没有",
+    latest ? (latest.verified ? "已校验" : kb(latest.kb)) : "点「立即备份」",
+    last && (now - Math.max(last, check || 0)) < 172800 ? "ok" : "warn");
+  metric("#m-mac", b.mac_pulled ? ago(b.mac_pulled, now) : "还没有",
+    b.mac_pulled ? "已存到电脑" : "连上电脑自动拷",
+    b.mac_pulled && (!c.mac_alert_days || now - b.mac_pulled < c.mac_alert_days * 86400) ? "ok" : "warn");
+  metric("#m-tt", !d.tt.installed ? "没安装" : d.tt.generating ? "生成中" : d.tt.running ? (d.tt.frozen ? "被冻结" : "运行中") : "没运行",
+    d.tt.version ? `版本 ${d.tt.version}` : "", d.tt.frozen ? "warn" : d.tt.running ? "ok" : "");
+
+  $("#alerts").innerHTML = al.map(([k, t, s]) =>
+    `<div class="alert ${k === "warn" ? "" : k}">${k === "info" ? IC.info : IC.warn}<div><b>${esc(t)}</b><span>${esc(s)}</span></div></div>`).join("");
+
+  /* 备份列表 */
+  $("#backup-aside").textContent = b.items.length ? `${b.items.length} 份 · ${kb(d.space.backups)} · ${c.backup_private ? "只有 root 能读" : "文件管理器能看到"}` : "";
+  const items = b.items;
+  const show = showAll ? items : items.slice(0, 5);
+  $("#backups").innerHTML = items.length
+    ? show.map((it, i) => `<div class="row tap" data-restore="${esc(it.name)}">
+        <div class="main"><div class="title"><span class="chip ${it.tier === "new" ? "new" : ""}">${TIER[it.tier] || it.tier}</span>${esc(backupWhen(it.name))}</div>
+        <div class="sub">${kb(it.kb)}${it.verified ? ' · <span class="ok-ic">已校验</span>' : ' · <span class="warn-ic">没有校验文件</span>'}</div></div>
+        ${IC.chev}</div>`).join("") + (items.length > 5 ? `<button class="more" id="more">${showAll ? "收起" : `显示全部 ${items.length} 份`}</button>` : "")
+    : `<div class="empty">还没有备份。有变化时最多每 ${c.backup_hours} 小时自动备份一次，也可以点上面「立即备份」。</div>`;
+  const more = $("#more"); if (more) more.onclick = () => { showAll = !showAll; render(S); };
+  document.querySelectorAll("[data-restore]").forEach((el) => el.onclick = () => openRestore(el.dataset.restore));
+
+  /* 保活 */
+  const k = d.keep;
+  const tiles = [
+    ["电池优化白名单", k.whitelist ? "在" : "不在", k.whitelist ? "" : "warn"],
+    ["后台运行", k.background === "allow" ? "允许" : k.background, k.background === "allow" ? "" : "warn"],
+    ["待机分组", BUCKET[k.bucket] || (k.bucket ?? "—"), k.bucket != null && k.bucket <= 10 ? "" : "warn"],
+    ["网络", !d.tt.running ? "TT 没运行" : k.network === "NONE" ? "没被限制" : (k.network || "—"), !d.tt.running ? "idle" : k.network === "NONE" ? "" : "warn"],
+    ["电池温度", k.temp != null ? `${k.temp}°C` : "—", k.temp != null && c.temp_alert && k.temp >= c.temp_alert ? "warn" : ""],
+    ["冻结", !d.tt.running ? "TT 没运行" : d.tt.frozen ? `被 ${d.tt.frozen} 冻结` : "没冻结", !d.tt.running ? "idle" : d.tt.frozen ? "warn" : ""],
+  ];
+  $("#keep").innerHTML = tiles.map(([kk, vv, cls]) => `<div class="tile ${cls}"><div class="k">${kk}</div><div class="v"><i></i>${esc(vv)}</div></div>`).join("");
+
+  /* 图表 */
+  drawChart(d.days);
+  const t = d.today || [0, 0, 0, 0, 0, 0];
+  $("#today").innerHTML = [["今天生成", `${t[0]} 次`], ["生成时长", mins(t[1])], ["被冻结", `${t[2]} 次`], ["被系统杀", `${t[4]} 次`]]
+    .map(([a, bb]) => `<div><b>${esc(bb)}</b><span>${a}</span></div>`).join("");
+
+  /* 退出原因 */
+  const rs = d.reasons.map((line) => { const m = /^(\d+)\s+(.*)$/.exec(line); return m ? [+m[1], m[2]] : null; }).filter(Boolean);
+  $("#reasons").innerHTML = rs.length
+    ? rs.map(([n, why]) => `<div class="row"><div class="main"><div class="title">${esc(why)}</div></div><div class="end"><b>${n}</b> 次</div></div>`).join("")
+    : `<div class="empty">最近 7 天 TT 没有停过。</div>`;
+
+  /* 空间 */
+  const sp = d.space, parts = [["聊天和设置", sp.data, "var(--chart)"], ["备份", sp.backups, "var(--chart-2)"], ["TT 日志", sp.logs, "var(--faint)"], ["缓存", sp.cache, "var(--line)"]];
+  const total = parts.reduce((x, p) => x + (p[1] || 0), 0) || 1;
+  $("#space").innerHTML = `<div class="bar">${parts.map((p) => `<i style="width:${((p[1] || 0) / total * 100).toFixed(2)}%;background:${p[2]}"></i>`).join("")}</div>
+    <div class="keys">${parts.map((p) => `<div><i style="background:${p[2]}"></i>${p[0]}<b>${kb(p[1])}</b></div>`).join("")}</div>`;
+
+  renderSettings(c);
+
+  /* 日志 */
+  $("#log").innerHTML = d.log.slice().reverse().map((l) => {
+    const m = /^(\d\d-\d\d \d\d:\d\d:\d\d) (.*)$/.exec(l);
+    const hot = /失败|没了|崩溃|限制|烫|没备份|没拷/.test(l);
+    return m ? `<div${hot ? ' class="hl"' : ""}><span class="t">${esc(m[1])}</span> ${esc(m[2])}</div>` : `<div>${esc(l)}</div>`;
+  }).join("") || "还没有日志";
+}
+let showAll = false;
+
+function metric(sel, v, s, cls) {
+  const el = $(sel); el.className = "metric " + (cls || "");
+  el.querySelector(".v").classList.remove("skeleton");
+  el.querySelector(".v").textContent = v; el.querySelector(".s").textContent = s || "\u00a0";
+}
+
+function drawChart(days) {
+  const svg = $("#chart"), W = 320, H = 150, pad = { l: 26, r: 6, t: 14, b: 22 };
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const data = (days || []).slice(-7);
+  if (!data.length) { svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="var(--muted)" font-size="12">用一阵 TT 之后这里会有图</text>`; return; }
+  const vals = data.map((r) => r[2] / 60), max = Math.max(10, ...vals);
+  const nice = max <= 10 ? 10 : max <= 30 ? 30 : max <= 60 ? 60 : max <= 120 ? 120 : Math.ceil(max / 60) * 60;
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b, bw = Math.min(28, iw / data.length * .56);
+  let g = "";
+  [0, .5, 1].forEach((f) => {
+    const y = pad.t + ih * (1 - f);
+    g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}" stroke="var(--line)" stroke-width="1"/>`;
+    g += `<text x="${pad.l - 6}" y="${y + 3.5}" text-anchor="end" fill="var(--faint)" font-size="9.5">${Math.round(nice * f)}</text>`;
+  });
+  data.forEach((r, i) => {
+    const cx = pad.l + iw * (i + .5) / data.length, h = Math.max(vals[i] > 0 ? 2 : 0, ih * vals[i] / nice);
+    g += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${(pad.t + ih - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="4" fill="var(--chart)"><title>${r[0]}：${Math.round(vals[i])} 分钟，${r[1]} 次</title></rect>`;
+    if (r[3] > 0) g += `<circle cx="${cx.toFixed(1)}" cy="${(pad.t + ih - h - 7).toFixed(1)}" r="3" fill="var(--chart-2)"><title>被冻结 ${r[3]} 次</title></circle>`;
+    g += `<text x="${cx.toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="var(--muted)" font-size="10">${r[0].replace("-", "/")}</text>`;
+  });
+  svg.innerHTML = g;
+}
+
+/* ---------- 设置 ---------- */
+const TOGGLES = [
+  ["backup", "自动备份", "有变化时自动备份，不含 API 密钥"],
+  ["backup_private", "备份放在私密位置", "只有 root 能读；关掉就放「内部存储/Documents」，文件管理器能看到"],
+  ["auto_reopen", "被系统杀掉自动重开", "只在生成回复到一半被系统杀掉时"],
+  ["notify", "出事时发通知", "关掉的话只记日志"],
+];
+const STEPS = [
+  ["backup_hours", "备份间隔", "有变化时最多每几小时一次", 1, 48, (v) => `${v} 小时`],
+  ["keep_days", "按天保留", "每天留最新的一份", 1, 60, (v) => `${v} 天`],
+  ["keep_weeks", "按周保留", "每周留最新的一份", 0, 52, (v) => `${v} 周`],
+  ["keep_months", "按月保留", "每月留最新的一份", 0, 36, (v) => `${v} 个月`],
+  ["mac_alert_days", "没拷到电脑时提醒", "0 = 不提醒", 0, 30, (v) => v ? `${v} 天` : "不提醒"],
+  ["cleanup_days", "清理 TT 旧日志", "0 = 不清理", 0, 365, (v) => v ? `${v} 天前` : "不清理"],
+  ["temp_alert", "过热提醒", "生成回复时电池温度", 0, 60, (v) => v ? `${v}°C` : "不提醒"],
+];
+function renderSettings(c) {
+  $("#settings").innerHTML =
+    TOGGLES.map(([k, t, s]) => `<div class="row"><div class="main"><div class="title">${t}</div><div class="sub">${s}</div></div>
+      <label class="switch"><input type="checkbox" data-key="${k}" ${c[k] ? "checked" : ""} aria-label="${t}"><span></span></label></div>`).join("") +
+    STEPS.map(([k, t, s, lo, hi, fmt]) => `<div class="row"><div class="main"><div class="title">${t}</div><div class="sub">${s}</div></div>
+      <div class="stepper" data-key="${k}" data-lo="${lo}" data-hi="${hi}"><button aria-label="减少">−</button><output>${fmt(c[k] ?? 0)}</output><button aria-label="增加">+</button></div></div>`).join("");
+  document.querySelectorAll("#settings input[data-key]").forEach((el) => el.onchange = () => setKey(el.dataset.key, el.checked ? 1 : 0, el));
+  document.querySelectorAll("#settings .stepper").forEach((el) => {
+    const [minus, , plus] = el.children, key = el.dataset.key, lo = +el.dataset.lo, hi = +el.dataset.hi;
+    const step = (dlt) => { const cur = S.config[key] ?? 0, nv = Math.min(hi, Math.max(lo, cur + dlt)); if (nv !== cur) setKey(key, nv); };
+    minus.onclick = () => step(-1); plus.onclick = () => step(+1);
+  });
+}
+async function setKey(key, val, input) {
+  const old = S.config[key]; S.config[key] = val; renderSettings(S.config);
+  try {
+    const r = await ui(`set ${key} ${val | 0}`);
+    if (!r.ok) throw new Error(r.msg);
+    if (key === "backup_private") { toast(val ? "备份搬到私密位置了" : "备份搬到「内部存储/Documents/TauriTavern-backup」了"); load(); }
+  } catch (e) { S.config[key] = old; renderSettings(S.config); toast("没改成：" + e.message); }
+}
+
+/* ---------- 立即备份 ---------- */
+$("#btn-backup").onclick = async () => {
+  const btn = $("#btn-backup"); btn.disabled = true; const label = btn.innerHTML;
+  btn.innerHTML = "正在备份…";
+  try {
+    const r = await ui("backup");
+    if (r.ok) toast(`备份好了：${kb(r.kb)}，已校验${r.dropped ? `；清掉 ${r.dropped} 份旧的` : ""}`); else toast(r.msg || "备份失败");
+  } catch (e) { toast("备份失败：" + e.message); }
+  btn.innerHTML = label; btn.disabled = false; load();
+};
+
+/* ---------- 恢复 ---------- */
+$("#btn-restore").onclick = () => {
+  if (!S || !S.backup.items.length) { toast("还没有备份"); return; }
+  openSheet(`<div class="grab"></div><h3 id="sheet-title">选一份备份恢复</h3><p class="lead">新的在前。点一份看恢复会做什么，下一步才真正恢复。</p>
+    <div class="card">${S.backup.items.map((it) => `<div class="row tap" data-pick="${esc(it.name)}"><div class="main"><div class="title"><span class="chip ${it.tier === "new" ? "new" : ""}">${TIER[it.tier] || it.tier}</span>${esc(backupWhen(it.name))}</div><div class="sub">${kb(it.kb)}</div></div>${IC.chev}</div>`).join("")}</div>
+    <div class="btns" style="margin-top:14px"><button class="btn" data-close>取消</button></div>`);
+  document.querySelectorAll("[data-pick]").forEach((el) => el.onclick = () => openRestore(el.dataset.pick));
+};
+function openRestore(name) {
+  const running = S.tt.running;
+  openSheet(`<div class="grab"></div><h3 id="sheet-title">恢复 ${esc(backupWhen(name))} 的备份？</h3><p class="lead">${esc(name)}</p>
+    <ul class="steps">
+      <li>${IC.shield}<span>先把<b>现在的数据另存一份</b>。恢复错了，再恢复那一份就回来了。</span></li>
+      <li>${IC.check}<span>用备份覆盖 TT 里同名的聊天、角色卡、世界书、设置、扩展。</span></li>
+      <li>${IC.check}<span>备份之后新建的聊天<b>不会删</b>；API 密钥不动。</span></li>
+    </ul>
+    <div id="rs-state">${running ? `<div class="result warn">TT 正在运行。请先在最近任务里把 TT 划掉，再点「我已关掉 TT」。模块不会替你强制关掉它。</div>` : ""}</div>
+    <div class="btns">
+      ${running ? `<button class="btn" id="rs-recheck">我已关掉 TT</button>` : ""}
+      <button class="btn danger" id="rs-go" ${running ? "disabled" : ""}>恢复这一份</button>
+      <button class="btn" data-close>取消</button>
+    </div>`);
+  const go = $("#rs-go"), re = $("#rs-recheck");
+  if (re) re.onclick = async () => {
+    re.disabled = true; re.textContent = "正在检查…";
+    try { const d = await ui("status"); S = d; } catch {}
+    if (S.tt.running) { re.disabled = false; re.textContent = "我已关掉 TT"; toast("TT 还在运行"); }
+    else { $("#rs-state").innerHTML = `<div class="result ok">TT 已经关了，可以恢复。</div>`; re.remove(); go.disabled = false; }
+  };
+  go.onclick = async () => {
+    go.disabled = true; go.textContent = "正在恢复…（先另存现在的数据）";
+    let r;
+    try { r = await ui(`restore ${name.replace(/[^A-Za-z0-9._-]/g, "")}`); } catch (e) { r = { rc: 99, out: [e.message] }; }
+    const ok = r.rc === 0;
+    $("#rs-state").innerHTML = `<div class="result ${ok ? "ok" : "bad"}">${esc((r.out || []).join("\n"))}</div>`;
+    go.remove();
+    const c = document.querySelector("[data-close]"); c.textContent = ok ? "完成，去打开 TT" : "关闭";
+    load();
+  };
+}
+function openSheet(html) {
+  $("#sheet").innerHTML = html; $("#sheetbox").classList.add("open");
+  document.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeSheet);
+}
+function closeSheet() { $("#sheetbox").classList.remove("open"); }
+$("#scrim").onclick = closeSheet;
+
+/* ---------- 刷新 ---------- */
+let loading = false;
+async function load() {
+  if (loading) return; loading = true; $("#refresh").classList.add("spin");
+  try { render(await ui("status")); }
+  catch (e) { $("#verdict").classList.remove("skeleton"); $("#verdict").textContent = "读不到状态"; toast(e.message); }
+  loading = false; $("#refresh").classList.remove("spin");
+}
+$("#refresh").onclick = load;
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+setInterval(() => { if (!document.hidden && !$("#sheetbox").classList.contains("open")) load(); }, 30000);
+
+/* ---------- 演示数据（只在普通浏览器里用） ---------- */
+function demo(args) {
+  const now = Math.floor(Date.now() / 1000), H = 3600, D = 86400;
+  const stamp = (t) => { const d = new Date(t * 1000), p = (n) => String(n).padStart(2, "0"); return `tt-default-user-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.tar.gz`; };
+  const day = (o) => { const d = new Date((now - o * D) * 1000); return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  demo.state = demo.state || {
+    now, version: "1.6",
+    tt: { installed: true, running: true, generating: false, frozen: "", pids: "4976", version: "2.3.0", webview: "com.google.android.webview, 153.0.8010.36" },
+    keep: { whitelist: true, background: "allow", bucket: 5, network: "NONE", temp: 36 },
+    today: [6, 1420, 1, 0, 0, 0],
+    days: [[day(6), 4, 900, 0, 0, 0, 1], [day(5), 9, 2400, 2, 0, 0, 0], [day(4), 2, 300, 0, 0, 0, 0], [day(3), 0, 0, 0, 0, 0, 0], [day(2), 12, 3900, 3, 1, 1, 0], [day(1), 7, 1800, 0, 0, 0, 2], [day(0), 6, 1420, 1, 0, 0, 0]],
+    reasons: ["8 被强制停止", "1 内存不够，被系统回收"],
+    exits: [], crashes: 0,
+    space: { data: 101500, logs: 2660, cache: 1740, backups: 318000 },
+    backup: { dir: "/data/adb/tt-backups", last: now - 2 * H, check: now - 2 * H, fails: 0, mac_pulled: now - 5 * H, watch_since: now - 9 * D,
+      items: [[2 * H, "new"], [8 * H, "2d"], [26 * H, "2d"], [2 * D, "day"], [3 * D, "day"], [5 * D, "day"], [12 * D, "week"], [40 * D, "month"]]
+        .map(([o, tier], i) => ({ name: stamp(now - o), tier, kb: 45400 - i * 120, verified: true })) },
+    config: { backup: 1, backup_hours: 6, backup_private: 1, keep_days: 7, keep_weeks: 4, keep_months: 6, mac_alert_days: 3, auto_reopen: 1, notify: 1, cleanup_days: 30, temp_alert: 45 },
+    log: ["开始运行（版本 1.6）", "已备份并校验 TT 数据：" + stamp(now - 8 * H) + "（45400 KB，不含 API 密钥）", "TT（4976）被 Android 冻结了", "TT（4976）解冻，冻了约 45 秒", "已备份并校验 TT 数据：" + stamp(now - 2 * H) + "（45390 KB，不含 API 密钥）；按分层保留清掉 1 份旧的"]
+      .map((l, i) => `${day(0)} ${String(8 + i).padStart(2, "0")}:1${i}:0${i} ${l}`),
+  };
+  const st = demo.state; st.now = Math.floor(Date.now() / 1000);
+  const wait = (v) => new Promise((r) => setTimeout(() => r(v), 450));
+  if (args === "status") return wait(JSON.parse(JSON.stringify(st)));
+  if (args === "backup") { st.backup.items.unshift({ name: stamp(st.now), tier: "new", kb: 45410, verified: true }); st.backup.items[1].tier = "2d"; st.backup.last = st.now; return wait({ ok: true, name: st.backup.items[0].name, kb: 45410, dropped: 0 }); }
+  if (args.startsWith("set ")) { const [, k, v] = args.split(" "); st.config[k] = +v; return wait({ ok: true }); }
+  if (args.startsWith("restore ")) return wait(st.tt.running ? { rc: 3, out: ["TT 正在运行：先在最近任务里把 TT 划掉，再恢复"] } : { rc: 0, out: ["已恢复：" + args.slice(8), "恢复前的数据另存为：" + stamp(st.now) + "（同一个文件夹，想撤销就恢复它）"] });
+  return wait({});
+}
+if (!HAS_KSU) { $("#demo").hidden = false; window.__demoToggleRunning = () => { demo.state.tt.running = !demo.state.tt.running; }; }
+load();
+</script>
+</body>
+</html>

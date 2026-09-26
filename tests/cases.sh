@@ -56,10 +56,11 @@ export FAKE_VER=2.3.0 FAKE_NET=NONE FAKE_LOGCAT=/nonexistent FAKE_CE=true FAKE_P
 DAY0=86400   # 1970-01-02 00:00 UTC，按天算的用例从这里开始
 
 newmod() {   # 新建一个空的模块目录（放进脚本），设好环境
-    D=$T/mod$1; rm -rf "$D"; mkdir -p "$D"; cp "$MOD"/*.sh "$MOD/module.prop" "$D/"
-    export TT_MODDIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1 TT_DATA=$T/data$1 BACKUP_DIR=$T/backup$1 \
+    D=$T/mod$1; rm -rf "$D"; mkdir -p "$D"; cp "$MOD"/*.sh "$MOD"/*.awk "$MOD/module.prop" "$D/"
+    export TT_MODDIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1 TT_DATA=$T/data$1 PRIVATE_BK=$T/backup$1 SHARED_BK=$T/shared$1 \
            TT_LOGS=$T/ttlogs$1 ANR_DIR=$T/anr$1 BATTERY_TEMP=$T/temp$1
     : > "$CALLS"
+    BACKUP_DIR=$PRIVATE_BK   # 默认 backup_private=1
 }
 calls() { cat "$CALLS"; }
 
@@ -186,7 +187,12 @@ newmod 20; ( load
     check "读开关" '[ "$(cfg backup 1)" = 0 ]'
     check "行尾注释" '[ "$(cfg auto_reopen 1)" = 0 ]'
     echo "$DEFAULT_CONFIG" > "$CONFIG"
-    check "默认 config 是全开" '[ "$(cfg backup 0)$(cfg backup_keep 0)$(cfg auto_reopen 0)$(cfg notify 0)" = 1711 ]'
+    check "默认 config" '[ "$(cfg backup 0)$(cfg backup_hours 0)$(cfg backup_private 0)$(cfg keep_days 0)$(cfg auto_reopen 0)$(cfg notify 0)" = 161711 ]'
+    printf '# 备份留几份\nbackup_keep=3\nbackup=1\n' > "$CONFIG"; config_fill
+    check "旧的 backup_keep 换成 keep_days" '! grep -q backup_keep "$CONFIG" && grep -qx keep_days=3 "$CONFIG" && ! grep -q "备份留几份" "$CONFIG"'
+    check "config_set 改数字" 'config_set keep_weeks 9 && grep -qx keep_weeks=9 "$CONFIG"'
+    check "config_set 不认识的开关" '! config_set evil 1 && ! grep -q evil "$CONFIG"'
+    check "config_set 不是数字" '! config_set notify "1;rm" && grep -qx notify=1 "$CONFIG"'
     FAKE_NOW=$DAY0
     check "没统计时是 0" '[ "$(stat_get 3)" = 0 ]'
     stat_add 2 1; stat_add 3 40; stat_add 3 5
@@ -284,44 +290,107 @@ newmod 26; ( load
     check "重装记一行" 'grep -q "TT 重装过（uid 10001 → 10447）" "$LOG"'
     )
 
-echo "[1.4] 每天备份"
+echo "[1.6] 备份：有变化才备份、校验、分层保留"
+bk() { ls "$BACKUP_DIR" 2>/dev/null | grep '\.tar\.gz$'; }
 newmod 27; ( load
     FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
-    U=$TT_DATA/default-user; mkdir -p "$U/chats/角色 A" "$U/backups" "$U/thumbnails" "$U/OpenAI Settings"
-    echo hi > "$U/chats/角色 A/1.jsonl"; echo '{"api_key":"sk-SECRET"}' > "$U/secrets.json"
+    U=$TT_DATA/default-user; mkdir -p "$U/chats/角色 A" "$U/backups" "$U/thumbnails" "$U/OpenAI Settings" "$TT_DATA/extensions/third-party/x" "$TT_DATA/_cm_archive" "$TT_DATA/_cache" "$TT_DATA/_tauritavern/mcp"
+    echo hi > "$U/chats/角色 A/1.jsonl"; echo '{"api_key":"sk-SECRET"}' > "$U/secrets.json"; echo '{"k":"sk-NESTED"}' > "$TT_DATA/_tauritavern/mcp/secrets.json"
     echo old > "$U/backups/x"; mkdir -p "$U/.staging"; echo w > "$U/.staging/w"; echo t > "$U/thumbnails/t"; echo s > "$U/settings.json"; echo p > "$U/OpenAI Settings/p.json"
+    echo e > "$TT_DATA/extensions/third-party/x/index.js"; echo a > "$TT_DATA/_cm_archive/a.json"; echo c > "$TT_DATA/_cache/c"; echo m > "$TT_DATA/_tauritavern/mcp/r.json"
     FAKE_CE=false FAKE_PIDS=9 FAKE_GEN=0 FAKE_NOW=$((DAY0 - 100)); tick
-    check "开机后没解锁不备份" '[ -z "$(ls "$BACKUP_DIR" 2>/dev/null)" ]'
+    check "开机后没解锁不备份" '[ -z "$(bk)" ]'
     check "没解锁不算失败" '! grep -q "备份 TT 数据失败" "$LOG" 2>/dev/null && [ -z "$(state_get backup_try)" ]'
     FAKE_CE=true
     FAKE_PIDS=9 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
-    check "生成中不备份" '[ -z "$(ls "$BACKUP_DIR" 2>/dev/null)" ]'
+    check "生成中不备份" '[ -z "$(bk)" ]'
     FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
-    f=$(ls "$BACKUP_DIR"/tt-default-user-*.tar.gz 2>/dev/null | head -1)
-    check "备份出来了" '[ -n "$f" ]'
+    f=$BACKUP_DIR/$(bk | head -1)
+    check "备份出来了，放在私密位置" '[ -f "$f" ] && [ ! -d "$SHARED_BK" ]'
     list=$(LC_ALL=en_US.UTF-8 tar -tzf "$f" 2>/dev/null)   # Mac 的 tar 在 C 语言环境下会把中文转义
     check "有聊天（带空格和中文的路径）" 'echo "$list" | grep -q "default-user/chats/角色 A/1.jsonl"'
     check "有设置" 'echo "$list" | grep -q "default-user/settings.json" && echo "$list" | grep -q "OpenAI Settings/p.json"'
-    check "没有 API 密钥" '! echo "$list" | grep -q secrets && ! tar -xzOf "$f" 2>/dev/null | grep -q sk-SECRET'
+    check "有扩展、归档、MCP 配置" 'echo "$list" | grep -q "extensions/third-party/x/index.js" && echo "$list" | grep -q "_cm_archive/a.json" && echo "$list" | grep -q "_tauritavern/mcp/r.json"'
+    check "没有缓存" '! echo "$list" | grep -q "_cache"'
+    check "任何位置的 secrets.json 都不进备份" '! echo "$list" | grep -q secrets && ! tar -xzOf "$f" 2>/dev/null | grep -qE "sk-SECRET|sk-NESTED"'
     check "没有 TT 自己的备份和缩略图" '! echo "$list" | grep -qE "default-user/(backups|thumbnails|\.staging)/"'
-    check "没留半截文件" '[ -z "$(ls -a "$BACKUP_DIR" | grep part)" ]'
-    check "记日志（文件名和大小）" 'grep -q "已备份 TT 数据：tt-default-user-19700102-000015.tar.gz（[0-9][0-9]* KB" "$LOG"'
+    check "没留半截文件和锁" '[ -z "$(ls -a "$BACKUP_DIR" | grep part)" ] && [ ! -d "$TT_MODDIR/.backup.lock" ]'
+    check "写了 sha256 且对得上" '( cd "$BACKUP_DIR" && { sha256sum -c "${f##*/}.sha256" || shasum -a 256 -c "${f##*/}.sha256"; } ) >/dev/null 2>&1'
+    check "记日志（已校验、文件名和大小）" 'grep -q "已备份并校验 TT 数据：tt-default-user-19700102-000015.tar.gz（[0-9][0-9]* KB" "$LOG"'
     FAKE_NOW=$((DAY0 + 3600)); tick
-    check "一天只备份一次" '[ "$(ls "$BACKUP_DIR" | wc -l | tr -d " ")" = 1 ]'
-    echo backup_keep=2 > "$CONFIG"
-    for k in 1 2 3; do FAKE_NOW=$((DAY0 + 15 + k * 86400)); tick; done
-    check "只留 2 份，删最旧的" '[ "$(ls "$BACKUP_DIR" | tr "\n" " ")" = "tt-default-user-19700104-000015.tar.gz tt-default-user-19700105-000015.tar.gz " ]'
-    echo backup=0 > "$CONFIG"; FAKE_NOW=$((DAY0 + 15 + 5 * 86400)); tick
-    check "关了就不备份" '[ "$(ls "$BACKUP_DIR" | wc -l | tr -d " ")" = 2 ]'
+    check "6 小时内不再备份" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
+    FAKE_NOW=$((DAY0 + 7 * 3600)); tick
+    check "数据没变就不备份" '[ "$(bk | wc -l | tr -d " ")" = 1 ] && [ "$(state_get last_backup_check)" = $((DAY0 + 7 * 3600)) ]'
+    touch -t 200001010000 "$TT_MODDIR/backup.marker"   # 等于「上次备份以后改过文件」
+    FAKE_NOW=$((DAY0 + 8 * 3600)); tick
+    check "改过也要等到间隔" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
+    FAKE_NOW=$((DAY0 + 13 * 3600 + 15)); tick
+    check "数据变了、间隔到了就备份" '[ "$(bk | wc -l | tr -d " ")" = 2 ]'
+    touch -t 203001010000 "$U/thumbnails/t" "$U/content.log" 2>/dev/null; FAKE_NOW=$((DAY0 + 20 * 3600)); tick
+    check "只有缩略图变了不算变化" '[ "$(bk | wc -l | tr -d " ")" = 2 ]'
+    echo backup=0 > "$CONFIG"; touch -t 200001010000 "$TT_MODDIR/backup.marker"; FAKE_NOW=$((DAY0 + 30 * 3600)); tick
+    check "关了就不备份" '[ "$(bk | wc -l | tr -d " ")" = 2 ]'
     )
 newmod 28; ( load
     FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
     FAKE_PIDS="" FAKE_NOW=$DAY0; tick
-    check "没有数据时记失败" 'grep -q "备份 TT 数据失败，1 小时后再试" "$LOG"'
+    check "没有数据时记失败" 'grep -q "备份 TT 数据失败（连续第 1 次），1 小时后再试" "$LOG"'
     FAKE_NOW=$((DAY0 + 600)); tick
     check "1 小时内不重试" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 1 ]'
-    FAKE_NOW=$((DAY0 + 3700)); tick
-    check "1 小时后重试" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 2 ]'
+    FAKE_NOW=$((DAY0 + 3700)); tick; FAKE_NOW=$((DAY0 + 7400)); tick
+    check "连续失败 3 次发通知" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 3 ] && calls | grep -q "^cmd notification.*TT 备份连续失败 3 次"'
+    mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"; FAKE_NOW=$((DAY0 + 11100)); tick
+    check "成功后失败次数清零" '[ "$(state_get backup_fails)" = 0 ]'
+    )
+
+echo "[1.6] 分层保留"
+newmod 33; ( load
+    mkdir -p "$BACKUP_DIR"
+    for n in 20260926-120000 20260926-060000 20260925-230000 20260920-100000 20260920-090000 20260910-100000 20260908-100000 20260801-100000 20250101-100000; do
+        echo x > "$BACKUP_DIR/tt-default-user-$n.tar.gz"; echo h > "$BACKUP_DIR/tt-default-user-$n.tar.gz.sha256"
+    done
+    FAKE_NOW=1790380800   # 2026-09-26 UTC
+    check "层级" '[ "$(backup_tiers | cut -d" " -f1 | tr "\n" " ")" = "new 2d 2d day drop week drop month drop " ]'
+    dropped=$(apply_retention | tr "\n" " ")
+    check "删了多余的三份" '[ "$dropped" = "tt-default-user-20260920-090000.tar.gz tt-default-user-20260908-100000.tar.gz tt-default-user-20250101-100000.tar.gz " ]'
+    check "校验文件一起删" '[ ! -f "$BACKUP_DIR/tt-default-user-20250101-100000.tar.gz.sha256" ] && [ -f "$BACKUP_DIR/tt-default-user-20260801-100000.tar.gz.sha256" ]'
+    check "剩 6 份" '[ "$(bk | wc -l | tr -d " ")" = 6 ]'
+    echo keep_months=0 > "$CONFIG"; apply_retention >/dev/null
+    check "keep_months=0 按月的也删" '[ ! -f "$BACKUP_DIR/tt-default-user-20260801-100000.tar.gz" ]'
+    check "不认识的文件不碰" 'echo x > "$BACKUP_DIR/notes.txt"; apply_retention >/dev/null; [ -f "$BACKUP_DIR/notes.txt" ]'
+    )
+
+echo "[1.6] 备份位置：私密 ↔ 共享"
+newmod 34; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$SHARED_BK"; echo x > "$SHARED_BK/tt-default-user-20260926-1349.tar.gz"; echo keep > "$SHARED_BK/我的笔记.txt"
+    FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    check "1.5 的备份搬进私密位置" '[ -f "$PRIVATE_BK/tt-default-user-20260926-1349.tar.gz" ] && [ ! -f "$SHARED_BK/tt-default-user-20260926-1349.tar.gz" ]'
+    check "共享位置里别的文件不碰" '[ -f "$SHARED_BK/我的笔记.txt" ]'
+    check "记日志" 'grep -q "把 1 个备份文件搬到了 $PRIVATE_BK" "$LOG"'
+    check "改开关：共享" 'config_set backup_private 0 && [ "$(bdir)" = "$SHARED_BK" ]'
+    n=$(migrate_backups)
+    check "改回共享就搬回去" '[ "$n" -ge 1 ] && [ -f "$SHARED_BK/tt-default-user-20260926-1349.tar.gz" ]'
+    )
+
+echo "[1.6] 太久没备份 / 没拷到电脑"
+newmod 35; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$TT_DATA/default-user" "$BACKUP_DIR"; echo x > "$TT_DATA/default-user/a"
+    state_set watch_since $DAY0; state_set last_backup $DAY0; state_set last_backup_check $DAY0
+    echo x > "$BACKUP_DIR/tt-default-user-19700102-000000.tar.gz"
+    echo backup_hours=48 > "$CONFIG"   # 这组只测提醒，别让它去备份
+    state_set backup_try $((DAY0 + 10 * 86400))
+    FAKE_PIDS="" FAKE_NOW=$((DAY0 + 86400)); tick
+    check "1 天：不提醒" '! calls | grep -q "^cmd notification"'
+    FAKE_NOW=$((DAY0 + 3 * 86400 + 60)); tick
+    check "3 天没拷到电脑提醒" 'calls | grep -q "^cmd notification.*已经 3 天没把备份拷到电脑"'
+    check "3 天没备份成功提醒" 'calls | grep -q "^cmd notification.*TT 已经 3 天没备份成功了"'
+    FAKE_NOW=$((DAY0 + 3 * 86400 + 120)); tick
+    check "同一天不重复提醒" '[ "$(calls | grep -c "^cmd notification")" = 2 ]'
+    : > "$CALLS"; sh "$TT_MODDIR/ui.sh" mark-pulled >/dev/null; state_set last_backup_check $((DAY0 + 4 * 86400))
+    FAKE_NOW=$((DAY0 + 4 * 86400 + 60)); tick
+    check "电脑拷走后不再提醒" '! calls | grep -q "拷到电脑"'
     )
 
 echo "[1.5] 崩溃记录"
@@ -394,9 +463,10 @@ echo "[1.5] 从备份恢复"
 mk chown 'echo "chown $*" >> "$CALLS"'
 mk chcon 'echo "chcon $*" >> "$CALLS"'
 newmod 32
-U=$TT_DATA/default-user; mkdir -p "$U/chats/A" "$BACKUP_DIR"
-echo "旧聊天" > "$U/chats/A/1.jsonl"; echo "sk-KEY" > "$U/secrets.json"
-( cd "$TT_DATA" && tar -czf "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz" default-user )
+U=$TT_DATA/default-user; mkdir -p "$U/chats/A" "$BACKUP_DIR" "$TT_DATA/extensions/e"
+echo "旧聊天" > "$U/chats/A/1.jsonl"; echo "sk-KEY" > "$U/secrets.json"; echo "旧扩展" > "$TT_DATA/extensions/e/i.js"
+( cd "$TT_DATA" && tar -czf "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz" default-user extensions )
+echo "新扩展" > "$TT_DATA/extensions/e/i.js"
 echo "新聊天" > "$U/chats/A/1.jsonl"; echo "之后新建" > "$U/chats/A/2.jsonl"
 FAKE_PIDS=123 sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
 check "TT 在运行不恢复" '[ $r = 3 ] && grep -q "先在最近任务里把 TT 划掉" "$T/r.out" && grep -qx "新聊天" "$U/chats/A/1.jsonl"'
@@ -414,12 +484,47 @@ sh "$TT_MODDIR/restore.sh" "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz" 
 check "恢复成功" '[ $r = 0 ] && grep -q "已恢复" "$T/r.out"'
 check "备份里的文件恢复了" 'grep -qx "旧聊天" "$U/chats/A/1.jsonl"'
 check "备份里没有的留着" 'grep -qx "之后新建" "$U/chats/A/2.jsonl"'
+check "扩展也恢复了" 'grep -qx "旧扩展" "$TT_DATA/extensions/e/i.js"'
 check "API 密钥不动" 'grep -qx "sk-KEY" "$U/secrets.json"'
 check "恢复前先备份了现在的" '[ -f "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" ] && tar -xzOf "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" default-user/chats/A/1.jsonl | grep -qx "新聊天"'
 check "恢复前的备份不含密钥" '! tar -tzf "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" | grep -q secrets'
 check "属主改回 TT" 'calls | grep -q "^chown -R 10447:10447 $U"'
 check "临时目录删了" '[ ! -e "$TT_DATA/.cc-restore" ]'
 check "记日志" 'grep -q "从备份恢复了 TT 数据：tt-default-user-19700101-000000.tar.gz" "$TT_MODDIR/service.log"'
+
+echo "[1.6] 界面用的 ui.sh"
+newmod 36
+mkdir -p "$TT_DATA/default-user" "$BACKUP_DIR"; echo x > "$TT_DATA/default-user/a"
+printf '01-01 10:00:00 TT（1）12:00:00.000 退出：内存不够，被系统回收［LOW MEMORY］\n01-01 10:00:01 带"引号"和\\反斜杠\t制表\n' > "$TT_MODDIR/service.log"
+echo "01-01 2 330 3 1 2 1" > "$TT_MODDIR/stats.txt"
+echo 361 > "$BATTERY_TEMP"
+out=$(FAKE_WL=yes FAKE_RAIB=allow FAKE_PIDS=26636 FAKE_GEN=1 sh "$TT_MODDIR/ui.sh" status)
+if command -v python3 >/dev/null 2>&1; then
+    check "status 是合法 JSON" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d[\"tt\"][\"generating\"] is True and d[\"keep\"][\"temp\"]==36 and d[\"config\"][\"keep_days\"]==7 and d[\"days\"][0][2]==330 and \"带\\\"引号\\\"和\\\\反斜杠 制表\" in d[\"log\"][1]"'
+else
+    check "status 是 { 开头 } 结尾" 'case "$out" in "{"*"}") true ;; *) false ;; esac'
+fi
+check "status 里有备份位置" 'echo "$out" | grep -q "\"dir\":\"$PRIVATE_BK\""'
+r=$(sh "$TT_MODDIR/ui.sh" backup)
+check "ui backup 成功" 'echo "$r" | grep -q "\"ok\":true" && [ -n "$(ls "$BACKUP_DIR" | grep "\.tar\.gz$")" ]'
+out=$(sh "$TT_MODDIR/ui.sh" status)
+check "status 里列出备份和校验" 'echo "$out" | grep -q "\"tier\":\"new\"" && echo "$out" | grep -q "\"verified\":true"'
+l=$(sh "$TT_MODDIR/ui.sh" list-backups)
+check "list-backups：文件名 KB sha256" 'echo "$l" | grep -qE "^tt-default-user-[0-9-]+\.tar\.gz [0-9]+ [0-9a-f]{64}$"'
+check "ui set 改开关" 'sh "$TT_MODDIR/ui.sh" set temp_alert 40 | grep -q "\"ok\":true" && grep -qx temp_alert=40 "$TT_MODDIR/config.txt"'
+check "ui set 不认的开关" 'sh "$TT_MODDIR/ui.sh" set "x;touch $T/pwned" 1 | grep -q "\"ok\":false" && [ ! -e "$T/pwned" ]'
+check "ui set 改位置时搬备份" 'sh "$TT_MODDIR/ui.sh" set backup_private 0 >/dev/null; [ -n "$(ls "$SHARED_BK" | grep "\.tar\.gz$")" ] && [ -z "$(ls "$PRIVATE_BK" 2>/dev/null | grep "\.tar\.gz$")" ]'
+sh "$TT_MODDIR/ui.sh" set backup_private 1 >/dev/null
+check "ui mark-pulled" 'sh "$TT_MODDIR/ui.sh" mark-pulled >/dev/null; grep -q "^mac_pulled=" "$TT_MODDIR/state.txt"'
+r=$(FAKE_PIDS=5 sh "$TT_MODDIR/ui.sh" restore "$(ls "$BACKUP_DIR" | grep "\.tar\.gz$" | head -1)")
+check "ui restore：TT 在运行时 rc=3 并说明" 'echo "$r" | grep -q "\"rc\":3" && echo "$r" | grep -q "先在最近任务里把 TT 划掉"'
+check "ui 不认识的命令" '! sh "$TT_MODDIR/ui.sh" rm-rf >/dev/null'
+
+echo "[1.6] 界面文件"
+H=$MOD/webroot/index.html
+check "界面不引用任何外部网址" '! grep -qE "(src|href)=\"https?://" "$H" && ! grep -q "@import" "$H"'
+check "界面只调本模块的 ui.sh" '[ "$(grep -o "ksu\.exec([^)]*" "$H" | wc -l | tr -d " ")" = 1 ] && grep -q "sh \${MOD}/ui.sh" "$H"'
+check "恢复时只放行安全的文件名字符" 'grep -q "name.replace(/\[^A-Za-z0-9._-\]/g" "$H"'
 
 echo "[service] 不再写 /proc"
 check "没有往 /proc 写东西" '! grep -nE ">[[:space:]]*\"?(/proc|\\\$f)" "$MOD"/*.sh'
@@ -443,8 +548,8 @@ check "今天统计" 'echo "$out" | grep -q "今天：生成 2 次，共 5 分�
 check "7 天表" 'echo "$out" | grep -q "^01-01 .* 2 .*5 分 .*3(1)"'
 check "退出原因汇总" 'echo "$out" | grep -q "2 内存不够，被系统回收$"'
 check "汇总里强制停止不带括号" 'echo "$out" | grep -q "1 被强制停止$"'
-check "备份一栏" 'echo "$out" | grep -q "现有 0 份"'
-check "开关一栏" 'echo "$out" | grep -q "备份 1（留 7 份），自动重开 1，通知 1" && echo "$out" | grep -q "清理 TT 30 天以前的日志（0 = 不清理），温度提醒 45°C"'
+check "备份一栏" 'echo "$out" | grep -q "还没有备份" && echo "$out" | grep -q "位置：$PRIVATE_BK（只有 root 能读"'
+check "开关一栏" 'echo "$out" | grep -q "备份 1，私密位置 1，自动重开 1，通知 1" && echo "$out" | grep -q "清理 TT 30 天以前的日志（0 = 不清理），温度提醒 45°C（0 = 不提醒），3 天没拷到电脑提醒"'
 check "电池温度" 'echo "$out" | grep -q "电池温度：36°C"'
 check "版本" 'echo "$out" | grep -q "TT 版本：2.3.0；系统浏览器内核：com.google.android.webview, 153.0.8010.36"'
 check "空间" 'echo "$out" | grep -q "^聊天和设置 .*，TT 日志 .*，缓存 .*，本模块的备份 "'
