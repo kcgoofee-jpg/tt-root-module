@@ -4,7 +4,7 @@
 # KernelSU 直接用；也带了 Magisk 要的 META-INF（按 Magisk 文档写的安装器，Magisk 上没实测过）。
 set -e
 HERE=${0:A:h}
-FILES=(module.prop common.sh service.sh uninstall.sh action.sh customize.sh
+FILES=(module.prop common.sh service.sh uninstall.sh action.sh customize.sh restore.sh
        META-INF/com/google/android/update-binary META-INF/com/google/android/updater-script)
 cd "$HERE/ksu-tt-keepalive"
 v=$(sed -n "s/^version=//p" module.prop)

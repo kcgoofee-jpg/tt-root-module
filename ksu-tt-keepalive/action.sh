@@ -12,6 +12,8 @@ echo "待机分组：$b（$m）"
 uid=$(app_uid)
 n=$(net_effective "$uid")
 case "$n" in NONE) echo "网络：没被限制" ;; '') echo "网络：看不到（TT 没在运行时正常）" ;; *) echo "网络：被限制（$n）" ;; esac
+t=$(battery_temp); [ -n "$t" ] && echo "电池温度：${t}°C"
+echo "TT 版本：$(tt_version)；系统浏览器内核：$(webview_version)"
 
 pids=$(pidof "$PKG" 2>/dev/null)
 if [ -z "$pids" ]; then
@@ -39,6 +41,12 @@ fi
 r=$(grep "退出：" "$LOG" 2>/dev/null | sed 's/.*退出：//; s/［.*//; s/（.*//' | sort | uniq -c | sort -rn)
 [ -n "$r" ] && { echo "退出原因（最近 7 天）："; echo "$r" | sed 's/^ */  /'; }
 
+echo "== TT 占的空间 =="
+set -- $(tt_space)
+echo "聊天和设置 $(human_kb "$1")，TT 日志 $(human_kb "$2")，缓存 $(human_kb "$3")，本模块的备份 $(human_kb "$4")"
+nc=$(ls -d "$CRASH_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ')
+[ "$nc" -gt 0 ] && echo "崩溃记录：$nc 份（最新 $(ls -d "$CRASH_DIR"/*/ | sort | tail -n 1 | sed 's|/$||; s|.*/||')）"
+
 echo "== 最近 3 次 TT 退出（系统记录）=="
 exit_records | head -n 3 | while IFS= read -r rec; do exit_line "$rec"; done
 echo "== 备份 =="
@@ -51,7 +59,8 @@ else
     echo "已关（config.txt 里 backup=0）"
 fi
 echo "== 开关（模块目录的 config.txt）=="
-echo "备份 $(cfg backup 1)，自动重开 $(cfg auto_reopen 1)，通知 $(cfg notify 1)（1 开 0 关）"
+echo "备份 $(cfg backup 1)（留 $(cfg backup_keep 7) 份），自动重开 $(cfg auto_reopen 1)，通知 $(cfg notify 1)（1 开 0 关）"
+echo "清理 TT $(cfg cleanup_days 30) 天以前的日志（0 = 不清理），温度提醒 $(cfg temp_alert 45)°C（0 = 不提醒）"
 [ -f "$PRIOR" ] && { echo "== 装模块前的原值（卸载时还原）=="; grep -v '^#' "$PRIOR"; }
 echo "== 最近的日志 =="
 tail -n 10 "$LOG" 2>/dev/null

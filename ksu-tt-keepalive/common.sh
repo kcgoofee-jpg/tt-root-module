@@ -13,6 +13,10 @@ STATE=${STATE:-$MODDIR/state.txt}
 STATS=${STATS:-$MODDIR/stats.txt}      # 每天一行的统计，留 8 天
 CONFIG=${CONFIG:-$MODDIR/config.txt}   # 开关，改完不用重启
 TT_DATA=${TT_DATA:-/data/media/0/Android/data/$PKG/data}
+TT_LOGS=${TT_LOGS:-/data/media/0/Android/data/$PKG/logs}   # TT 自己的日志和请求记录
+CRASH_DIR=${CRASH_DIR:-$MODDIR/crash}                       # TT 崩溃 / 没响应时存的记录，留 10 份
+ANR_DIR=${ANR_DIR:-/data/anr}
+BATTERY_TEMP=${BATTERY_TEMP:-/sys/class/power_supply/battery/temp}   # 单位 0.1°C
 # 就是「内部存储/Documents/TauriTavern-backup」。直接写底层目录（不依赖 /sdcard 的挂载），
 # 写完把属主改成 media_rw（1023），文件管理器才能看到、删掉
 BACKUP_DIR=${BACKUP_DIR:-/data/media/0/Documents/TauriTavern-backup}
@@ -111,8 +115,9 @@ exit_records() {
         /process=/ && ts != "" {
             proc = $0; sub(/.*process=/, "", proc); sub(/ .*/, "", proc)
             want = (proc == p)
-            r = $0; sub(/.* reason=[0-9]* \(/, "", r); sub(/\).*/, "", r)
-            s = ""; if ($0 ~ /subreason=/) { s = $0; sub(/.* subreason=[0-9]* \(/, "", s); sub(/\).*/, "", s) }
+            # 原因文字本身可能带括号（APP CRASH(EXCEPTION)），所以截到「) subreason=」或「) status=」
+            r = $0; sub(/.* reason=[0-9]* \(/, "", r); sub(/\) (subreason|status)=.*/, "", r)
+            s = ""; if ($0 ~ /subreason=/) { s = $0; sub(/.* subreason=[0-9]* \(/, "", s); sub(/\) status=.*/, "", s) }
             next
         }
         /importance=/ && want {
@@ -147,13 +152,13 @@ exit_reason_zh() {
     esac
 }
 
-# 一条退出记录 → 一行人话
-exit_line() {
+# 一条退出记录 → 一行人话（在子 shell 里跑，不改外面的同名变量）
+exit_line() (
     IFS='|' read -r ts pid r s imp d <<EOF
 $1
 EOF
     echo "TT（$pid）${ts#* } 退出：$(exit_reason_zh "$r" "$s")［$r${s:+ / $s}，重要度 $imp${d:+，$(echo "$d" | cut -c1-60)}］"
-}
+)
 
 # 比 state 里 last_exit 新的退出记录，旧的在前逐条输出（输出的是 exit_records 的原始行）
 new_exits() {
@@ -197,12 +202,12 @@ net_effective() {
 backup_now() {
     [ -d "$TT_DATA/default-user" ] || return 1
     mkdir -p "$BACKUP_DIR" || return 1
-    name=tt-default-user-$(date +%Y%m%d-%H%M).tar.gz
+    name=tt-default-user-$(date +%Y%m%d-%H%M%S).tar.gz
     part=$BACKUP_DIR/.$name.part
     if nice -n 19 tar -czf "$part" -C "$TT_DATA" \
         --exclude=default-user/secrets.json --exclude=default-user/backups \
         --exclude=default-user/thumbnails --exclude=default-user/content.log \
-        --exclude=default-user/.staging \
+        --exclude=default-user/.staging --exclude=default-user/.cc-restore \
         default-user 2>/dev/null && [ -s "$part" ]; then
         mv "$part" "$BACKUP_DIR/$name" || return 1
         chown 1023:1023 "$BACKUP_DIR" "$BACKUP_DIR/$name" 2>/dev/null
@@ -219,3 +224,59 @@ prune_backups() {
         rm -f "$stale"
     done
 }
+
+# 系统浏览器内核（WebView）的版本，TT 靠它显示界面
+webview_version() {
+    dumpsys webviewupdate 2>/dev/null | sed -n 's/.*Current WebView package (name, version): (\(.*\))/\1/p' | head -1
+}
+
+# 电池温度（整数 °C），读不到时什么都不输出
+battery_temp() {
+    t=$(cat "$BATTERY_TEMP" 2>/dev/null)
+    case "$t" in ''|*[!0-9-]*) return ;; esac
+    echo $((t / 10))
+}
+
+# 是不是崩溃 / 没响应（这类要存证据）
+crash_reason() {
+    case "$1" in "APP CRASH"*|CRASH*|ANR) return 0 ;; esac
+    return 1
+}
+
+# TT 崩溃 / 没响应时，把系统的崩溃记录、ANR 记录、TT 日志的最后一段存进 crash/时间-pid/，只留 10 份。
+# $1 = exit_records 的一行。输出存放的目录。在子 shell 里跑，不改外面的同名变量
+save_crash() (
+    pid=$(echo "$1" | cut -d'|' -f2)
+    d=$CRASH_DIR/$(date +%Y%m%d-%H%M%S)-$pid
+    mkdir -p "$d" || return 1
+    { exit_line "$1"; echo; echo "$1"; } > "$d/退出原因.txt"
+    logcat -d -b crash 2>/dev/null | grep -E "[^0-9]$pid[^0-9]" | tail -n 300 > "$d/系统崩溃记录.txt"
+    anr=$(grep -l "pid $pid" "$ANR_DIR"/anr_* 2>/dev/null | tail -n 1)
+    [ -n "$anr" ] && head -n 400 "$anr" > "$d/ANR记录.txt"
+    ttlog=$(ls "$TT_LOGS"/tauritavern.log.* 2>/dev/null | sort | tail -n 1)
+    [ -n "$ttlog" ] && tail -n 200 "$ttlog" > "$d/TT日志最后200行.txt"
+    for f in "$d"/*; do [ -s "$f" ] || rm -f "$f"; done
+    ls -d "$CRASH_DIR"/*/ 2>/dev/null | sort -r | tail -n +11 | while IFS= read -r stale; do rm -rf "${stale:?}"; done
+    echo "$d"
+)
+
+# 清理 TT 自己的旧日志：$1 天以前的 TT 运行日志（tauritavern.log.日期）和错误记录（_errors）。
+# 请求记录（llm-api-*）TT 自己会清，不碰。输出删了几个文件
+cleanup_tt() {
+    [ "$1" -gt 0 ] 2>/dev/null || { echo 0; return; }
+    { find "$TT_LOGS" -maxdepth 1 -type f -name 'tauritavern.log.*' -mtime +"$1" 2>/dev/null
+      find "$TT_DATA/_errors" -maxdepth 1 -type f -mtime +"$1" 2>/dev/null; } > "$STATE.clean"
+    n=0
+    while IFS= read -r f; do rm -f "$f" && n=$((n + 1)); done < "$STATE.clean"
+    rm -f "$STATE.clean"
+    echo $n
+}
+
+# TT 各部分占多大（KB）：「数据 日志 缓存 本模块的备份」
+tt_space() {
+    k() { du -sk "$1" 2>/dev/null | cut -f1; }
+    echo "$(k "$TT_DATA/default-user") $(k "$TT_LOGS") $(k "$TT_DATA/_cache") $(k "$BACKUP_DIR")"
+}
+
+# KB → 「12.3 MB」
+human_kb() { awk -v k="${1:-0}" 'BEGIN { if (k >= 1024) printf "%.1f MB", k / 1024; else printf "%d KB", k }'; }

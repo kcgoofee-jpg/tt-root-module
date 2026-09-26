@@ -27,6 +27,7 @@ mk dumpsys 'case "$1 ${2:-}" in
   "activity services") if [ "$FAKE_GEN" = 1 ]; then cat "$FIX/services-generating.txt"; else cat "$FIX/services-idle.txt"; fi ;;
   "activity exit-info") cat "$FAKE_EXIT" 2>/dev/null ;;
   "package com.tauritavern.client") echo "    versionName=$FAKE_VER" ;;
+  "webviewupdate ") echo "  Current WebView package (name, version): (com.google.android.webview, $FAKE_WV)" ;;
   "netpolicy ") sed "s/effective=NONE/effective=$FAKE_NET/" "$FIX/netpolicy.txt" ;;
 esac'
 mk cmd 'case "$1 $2" in
@@ -51,12 +52,13 @@ t=$FAKE_NOW; [ "${1:-}" = -d ] && { t=${2#@}; shift 2; }
 if "$REAL_DATE" -r 0 +%s >/dev/null 2>&1; then exec "$REAL_DATE" -r "$t" "$@"; else exec "$REAL_DATE" -d "@$t" "$@"; fi'
 export PATH="$BIN:$PATH" FIX CALLS=$T/calls
 export FAKE_WL=no FAKE_GEN=0 FAKE_EXIT=$FIX/exit-info.txt FAKE_RAIB=default FAKE_BUCKET=5 FAKE_INSTALLED=1 FAKE_PIDS="" FAKE_NOW=1000
-export FAKE_VER=2.3.0 FAKE_NET=NONE FAKE_LOGCAT=/nonexistent FAKE_CE=true FAKE_PMUID=""
+export FAKE_VER=2.3.0 FAKE_NET=NONE FAKE_LOGCAT=/nonexistent FAKE_CE=true FAKE_PMUID="" FAKE_WV=153.0.8010.36
 DAY0=86400   # 1970-01-02 00:00 UTC，按天算的用例从这里开始
 
 newmod() {   # 新建一个空的模块目录（放进脚本），设好环境
     D=$T/mod$1; rm -rf "$D"; mkdir -p "$D"; cp "$MOD"/*.sh "$MOD/module.prop" "$D/"
-    export TT_MODDIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1 TT_DATA=$T/data$1 BACKUP_DIR=$T/backup$1
+    export TT_MODDIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1 TT_DATA=$T/data$1 BACKUP_DIR=$T/backup$1 \
+           TT_LOGS=$T/ttlogs$1 ANR_DIR=$T/anr$1 BATTERY_TEMP=$T/temp$1
     : > "$CALLS"
 }
 calls() { cat "$CALLS"; }
@@ -303,12 +305,12 @@ newmod 27; ( load
     check "没有 API 密钥" '! echo "$list" | grep -q secrets && ! tar -xzOf "$f" 2>/dev/null | grep -q sk-SECRET'
     check "没有 TT 自己的备份和缩略图" '! echo "$list" | grep -qE "default-user/(backups|thumbnails|\.staging)/"'
     check "没留半截文件" '[ -z "$(ls -a "$BACKUP_DIR" | grep part)" ]'
-    check "记日志（文件名和大小）" 'grep -q "已备份 TT 数据：tt-default-user-19700102-0000.tar.gz（[0-9][0-9]* KB" "$LOG"'
+    check "记日志（文件名和大小）" 'grep -q "已备份 TT 数据：tt-default-user-19700102-000015.tar.gz（[0-9][0-9]* KB" "$LOG"'
     FAKE_NOW=$((DAY0 + 3600)); tick
     check "一天只备份一次" '[ "$(ls "$BACKUP_DIR" | wc -l | tr -d " ")" = 1 ]'
     echo backup_keep=2 > "$CONFIG"
     for k in 1 2 3; do FAKE_NOW=$((DAY0 + 15 + k * 86400)); tick; done
-    check "只留 2 份，删最旧的" '[ "$(ls "$BACKUP_DIR" | tr "\n" " ")" = "tt-default-user-19700104-0000.tar.gz tt-default-user-19700105-0000.tar.gz " ]'
+    check "只留 2 份，删最旧的" '[ "$(ls "$BACKUP_DIR" | tr "\n" " ")" = "tt-default-user-19700104-000015.tar.gz tt-default-user-19700105-000015.tar.gz " ]'
     echo backup=0 > "$CONFIG"; FAKE_NOW=$((DAY0 + 15 + 5 * 86400)); tick
     check "关了就不备份" '[ "$(ls "$BACKUP_DIR" | wc -l | tr -d " ")" = 2 ]'
     )
@@ -322,12 +324,110 @@ newmod 28; ( load
     check "1 小时后重试" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 2 ]'
     )
 
+echo "[1.5] 崩溃记录"
+newmod 30; ( load
+    FAKE_WL=yes FAKE_RAIB=allow; state_set last_exit 0
+    cat > "$T/crash-exit.txt" <<'X'
+        ApplicationExitInfo #0:
+          timestamp=2026-09-27 10:00:00.000 pid=4242 realUid=10447 packageUid=10447 definingUid=10447 user=0
+          process=com.tauritavern.client reason=4 (APP CRASH(EXCEPTION)) status=0
+          importance=100 pss=0.00 rss=300MB description=crash state=71 bytes trace=null
+X
+    printf '09-27 10:00:00.000  4242  4242 E AndroidRuntime: FATAL EXCEPTION: main\n09-27 10:00:00.000  999  999 E Other: x\n' > "$T/crashlog"
+    mkdir -p "$ANR_DIR" "$TT_LOGS"; printf 'pid 4242\ntrace\n' > "$ANR_DIR/anr_1"; printf 'pid 1\n' > "$ANR_DIR/anr_2"
+    echo "old" > "$TT_LOGS/tauritavern.log.2026-09-26"; seq 1 300 > "$TT_LOGS/tauritavern.log.2026-09-27"
+    mk logcat 'case "$*" in *crash*) cat "$FAKE_CRASHLOG" 2>/dev/null ;; *) cat "$FAKE_LOGCAT" 2>/dev/null ;; esac'
+    export FAKE_CRASHLOG=$T/crashlog
+    FAKE_EXIT=$T/crash-exit.txt FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    d=$(ls -d "$CRASH_DIR"/*/ 2>/dev/null | head -1)
+    check "存了崩溃记录" '[ -n "$d" ] && grep -q "TT 自己崩溃了" "$d/退出原因.txt"'
+    check "系统崩溃记录只要这个进程" 'grep -q "FATAL EXCEPTION" "$d/系统崩溃记录.txt" && ! grep -q Other "$d/系统崩溃记录.txt"'
+    check "ANR 记录找对文件" 'grep -q "pid 4242" "$d/ANR记录.txt"'
+    check "TT 日志取最新一天的最后 200 行" '[ "$(wc -l < "$d/TT日志最后200行.txt" | tr -d " ")" = 200 ] && [ "$(tail -n 1 "$d/TT日志最后200行.txt")" = 300 ]'
+    check "日志记了（目录名对）" 'grep -q "已保存崩溃记录：crash/19700102-000000-4242$" "$LOG"'
+    check "exit_line 不改外面的变量" 'd=keep; pid=keep; exit_line "2026|1|ANR||100|x" >/dev/null; [ "$d$pid" = keepkeep ]'
+    check "发了通知" 'calls | grep -q "^cmd notification.*TT 自己崩溃了"'
+    i=0; while [ $i -lt 12 ]; do mkdir -p "$CRASH_DIR/19700101-0000$(printf %02d $i)-1"; i=$((i + 1)); done
+    save_crash "2026|4242|ANR||100|" >/dev/null
+    check "崩溃记录只留 10 份" '[ "$(ls -d "$CRASH_DIR"/*/ | wc -l | tr -d " ")" = 10 ]'
+    mk logcat 'cat "$FAKE_LOGCAT" 2>/dev/null'
+    )
+
+echo "[1.5] 清理 TT 旧日志、温度、浏览器内核、补开关"
+newmod 31; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$TT_LOGS" "$TT_DATA/_errors" "$TT_DATA/default-user"
+    for f in "$TT_LOGS/tauritavern.log.old" "$TT_LOGS/llm-api-1.request.json" "$TT_DATA/_errors/e 1.txt"; do echo x > "$f"; touch -t 202001010000 "$f"; done
+    echo x > "$TT_LOGS/tauritavern.log.new"
+    FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    check "删了 30 天前的 TT 日志" '[ ! -f "$TT_LOGS/tauritavern.log.old" ]'
+    check "删了带空格名字的错误记录" '[ ! -f "$TT_DATA/_errors/e 1.txt" ]'
+    check "请求记录不碰" '[ -f "$TT_LOGS/llm-api-1.request.json" ]'
+    check "新日志不碰" '[ -f "$TT_LOGS/tauritavern.log.new" ]'
+    check "记日志" 'grep -q "清理了 TT 自己 30 天以前的日志和错误记录：2 个文件" "$LOG"'
+    echo x > "$TT_LOGS/tauritavern.log.old2"; touch -t 202001010000 "$TT_LOGS/tauritavern.log.old2"
+    FAKE_NOW=$((DAY0 + 60)); tick
+    check "一天只清一次" '[ -f "$TT_LOGS/tauritavern.log.old2" ]'
+    echo cleanup_days=0 > "$CONFIG"; FAKE_NOW=$((DAY0 + 86400)); tick
+    check "cleanup_days=0 不清" '[ -f "$TT_LOGS/tauritavern.log.old2" ]'
+    : > "$CONFIG"
+    echo 440 > "$BATTERY_TEMP"; FAKE_PIDS=5 FAKE_GEN=1 FAKE_NOW=$((DAY0 + 86500)); tick
+    check "44°C 不提醒" '! calls | grep -q "手机有点烫"'
+    echo 463 > "$BATTERY_TEMP"; FAKE_NOW=$((DAY0 + 86515)); tick; FAKE_NOW=$((DAY0 + 86530)); tick
+    check "46°C 提醒一次" '[ "$(calls | grep -c "^cmd notification.*手机有点烫：电池 46°C")" = 1 ]'
+    FAKE_GEN=0 FAKE_NOW=$((DAY0 + 86545)); tick
+    check "不在生成时不提醒" '[ "$(calls | grep -c "^cmd notification.*手机有点烫")" = 1 ]'
+    echo temp_alert=0 > "$CONFIG"; FAKE_GEN=1 FAKE_NOW=$((DAY0 + 86560)); tick
+    check "temp_alert=0 不提醒" '[ "$(calls | grep -c "^cmd notification.*手机有点烫")" = 1 ]'
+    echo abc > "$BATTERY_TEMP"; check "温度读不到时为空" '[ -z "$(battery_temp)" ]'
+    ensure
+    check "浏览器内核第一次只记下" '[ "$(state_get webview)" = "com.google.android.webview, 153.0.8010.36" ] && ! grep -q WebView "$LOG"'
+    FAKE_WV=154.0.1; ensure
+    check "浏览器内核更新记一行" 'grep -q "系统浏览器内核（WebView）更新：com.google.android.webview, 153.0.8010.36 → com.google.android.webview, 154.0.1" "$LOG"'
+    printf '# 我的注释\nbackup=0\n' > "$CONFIG"; config_fill
+    check "补开关：旧的不动" 'grep -qx backup=0 "$CONFIG" && [ "$(grep -c ^backup= "$CONFIG")" = 1 ]'
+    check "补开关：新的补上带注释" 'grep -qx cleanup_days=30 "$CONFIG" && grep -qx temp_alert=45 "$CONFIG" && grep -q "^# 清理 TT" "$CONFIG"'
+    config_fill; check "补开关：再补一次不重复" '[ "$(grep -c ^temp_alert= "$CONFIG")" = 1 ]'
+    )
+
+echo "[1.5] 从备份恢复"
+mk chown 'echo "chown $*" >> "$CALLS"'
+mk chcon 'echo "chcon $*" >> "$CALLS"'
+newmod 32
+U=$TT_DATA/default-user; mkdir -p "$U/chats/A" "$BACKUP_DIR"
+echo "旧聊天" > "$U/chats/A/1.jsonl"; echo "sk-KEY" > "$U/secrets.json"
+( cd "$TT_DATA" && tar -czf "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz" default-user )
+echo "新聊天" > "$U/chats/A/1.jsonl"; echo "之后新建" > "$U/chats/A/2.jsonl"
+FAKE_PIDS=123 sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
+check "TT 在运行不恢复" '[ $r = 3 ] && grep -q "先在最近任务里把 TT 划掉" "$T/r.out" && grep -qx "新聊天" "$U/chats/A/1.jsonl"'
+FAKE_CE=false sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > /dev/null; r=$?
+check "没解锁不恢复" '[ $r = 4 ]'
+sh "$TT_MODDIR/restore.sh" ../../etc/passwd > /dev/null; r=$?
+check "不是备份文件名不恢复" '[ $r = 2 ]'
+sh "$TT_MODDIR/restore.sh" tt-default-user-1.tar.gz > /dev/null; r=$?
+check "文件不存在不恢复" '[ $r = 2 ]'
+mkdir -p "$T/evil/other"; echo x > "$T/evil/other/x"; ( cd "$T/evil" && tar -czf "$BACKUP_DIR/tt-default-user-19700101-000001.tar.gz" other )
+sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000001.tar.gz > /dev/null; r=$?
+check "备份里有别的目录不恢复" '[ $r = 2 ] && [ ! -e "$TT_DATA/other" ]'
+: > "$CALLS"; FAKE_NOW=5000
+sh "$TT_MODDIR/restore.sh" "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz" > "$T/r.out"; r=$?
+check "恢复成功" '[ $r = 0 ] && grep -q "已恢复" "$T/r.out"'
+check "备份里的文件恢复了" 'grep -qx "旧聊天" "$U/chats/A/1.jsonl"'
+check "备份里没有的留着" 'grep -qx "之后新建" "$U/chats/A/2.jsonl"'
+check "API 密钥不动" 'grep -qx "sk-KEY" "$U/secrets.json"'
+check "恢复前先备份了现在的" '[ -f "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" ] && tar -xzOf "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" default-user/chats/A/1.jsonl | grep -qx "新聊天"'
+check "恢复前的备份不含密钥" '! tar -tzf "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" | grep -q secrets'
+check "属主改回 TT" 'calls | grep -q "^chown -R 10447:10447 $U"'
+check "临时目录删了" '[ ! -e "$TT_DATA/.cc-restore" ]'
+check "记日志" 'grep -q "从备份恢复了 TT 数据：tt-default-user-19700101-000000.tar.gz" "$TT_MODDIR/service.log"'
+
 echo "[service] 不再写 /proc"
 check "没有往 /proc 写东西" '! grep -nE ">[[:space:]]*\"?(/proc|\\\$f)" "$MOD"/*.sh'
 
 echo "[action] 状态输出"
 newmod 8
 mkdir -p "$CG_ROOT/uid_10447/pid_26636"; echo "frozen 0" > "$CG_ROOT/uid_10447/pid_26636/cgroup.events"
+echo 361 > "$BATTERY_TEMP"; mkdir -p "$TT_MODDIR/crash/19700101-000000-5"
 echo "01-01 10:00:00 TT（26636）12:29:36.672 退出：被强制停止（…）［USER REQUESTED / FORCE STOP］" > "$TT_MODDIR/service.log"
 echo "01-01 10:01:00 TT（1）12:00:00.000 退出：内存不够，被系统回收［LOW MEMORY］" >> "$TT_MODDIR/service.log"
 echo "01-01 10:02:00 TT（2）12:00:00.000 退出：内存不够，被系统回收［LOW MEMORY］" >> "$TT_MODDIR/service.log"
@@ -344,7 +444,11 @@ check "7 天表" 'echo "$out" | grep -q "^01-01 .* 2 .*5 分 .*3(1)"'
 check "退出原因汇总" 'echo "$out" | grep -q "2 内存不够，被系统回收$"'
 check "汇总里强制停止不带括号" 'echo "$out" | grep -q "1 被强制停止$"'
 check "备份一栏" 'echo "$out" | grep -q "现有 0 份"'
-check "开关一栏" 'echo "$out" | grep -q "备份 1，自动重开 1，通知 1"'
+check "开关一栏" 'echo "$out" | grep -q "备份 1（留 7 份），自动重开 1，通知 1" && echo "$out" | grep -q "清理 TT 30 天以前的日志（0 = 不清理），温度提醒 45°C"'
+check "电池温度" 'echo "$out" | grep -q "电池温度：36°C"'
+check "版本" 'echo "$out" | grep -q "TT 版本：2.3.0；系统浏览器内核：com.google.android.webview, 153.0.8010.36"'
+check "空间" 'echo "$out" | grep -q "^聊天和设置 .*，TT 日志 .*，缓存 .*，本模块的备份 "'
+check "崩溃记录份数" 'echo "$out" | grep -q "崩溃记录：1 份（最新 19700101-000000-5）"'
 check "最近三次退出" '[ "$(echo "$out" | grep -c "^TT（.*退出：")" = 3 ]'
 check "action 不改任何东西" '[ ! -s "$CALLS" ]'
 out=$(FAKE_PIDS="" sh "$TT_MODDIR/action.sh" 2>&1)

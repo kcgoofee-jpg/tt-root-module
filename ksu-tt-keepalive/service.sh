@@ -17,6 +17,10 @@
 # 另外两件（config.txt 里可以关）：
 #   9. 每天备份一次 TT 的数据到 /sdcard/Documents/TauriTavern-backup（不含 API 密钥），留最近 7 份
 #  10. TT 生成回复到一半被「系统」杀掉（不是你划掉、不是强制停止）时，自动重新打开 TT，10 分钟内最多一次
+#  11. 每天清理一次 TT 自己 30 天以前的运行日志和错误记录
+#  12. 生成回复时手机太烫（电池 45°C 以上）提醒一次
+# 另外只记录：TT 崩溃 / 没响应时把系统的崩溃记录和 TT 日志最后一段存进 crash/；系统浏览器内核（WebView）更新时记一行
+# 从备份恢复见 restore.sh
 # 不再调 /proc/<pid>/oom_score_adj（1.2 及以前做过）：系统决定冻结和查杀都不看它，还会被改回去。
 # 生成回复时 TT 2.3.0 自己开前台服务，系统优先级约 200，本来就不会被 Android 冻结；空闲时被冻结是正常省电。
 # 不联网、不下载、不含可执行文件；日志写在本模块目录的 service.log，留最近 7 天。
@@ -38,7 +42,21 @@ backup_keep=7
 # 生成回复到一半被系统杀掉时，自动重新打开 TT
 auto_reopen=1
 # 出事时发通知
-notify=1'
+notify=1
+# 清理 TT 自己多少天以前的运行日志和错误记录（0 = 不清理）
+cleanup_days=30
+# 生成回复时电池温度到多少度提醒（0 = 不提醒）
+temp_alert=45'
+
+# 旧版本升级上来的 config.txt 里没有的新开关，按默认值补上（已有的不动）
+config_fill() {
+    echo "$DEFAULT_CONFIG" | grep -E '^[a-z_]+=' | while IFS= read -r line; do
+        k=${line%%=*}
+        grep -q "^$k=" "$CONFIG" 2>/dev/null && continue
+        echo "$DEFAULT_CONFIG" | grep -B1 "^$k=" | head -n 1 | grep '^#' >> "$CONFIG"
+        echo "$line" >> "$CONFIG"
+    done
+}
 
 # 第一次运行（装上后第一次开机）：记下改之前的原值，卸载时还原成它
 record_prior() {
@@ -85,6 +103,10 @@ ensure() {
     old_v=$(state_get tt_version)
     [ -n "$old_v" ] && [ -n "$v" ] && [ "$old_v" != "$v" ] && log "TT 版本 $old_v → $v"
     [ -n "$v" ] && [ "$v" != "$old_v" ] && state_set tt_version "$v"
+    w=$(webview_version)
+    old_w=$(state_get webview)
+    [ -n "$old_w" ] && [ -n "$w" ] && [ "$old_w" != "$w" ] && log "系统浏览器内核（WebView）更新：$old_w → $w"
+    [ -n "$w" ] && [ "$w" != "$old_w" ] && state_set webview "$w"
     return 0
 }
 
@@ -109,6 +131,10 @@ report_exits() {
             [ -n "$src" ] && log "  系统日志：$src"
         elif [ "$r" = "USER REQUESTED" ]; then
             stat_add 7 1
+        elif crash_reason "$r"; then
+            cd_=$(save_crash "$rec")
+            [ -n "$cd_" ] && log "  已保存崩溃记录：crash/${cd_##*/}"
+            alert "TT $(exit_reason_zh "$r")" "系统的崩溃记录和 TT 日志已存进模块的 crash 文件夹，电脑上的「安卓保活模块」菜单会拷回电脑。"
         fi
         echo "$rec"
     done > "$STATE.exits"
@@ -174,6 +200,26 @@ maybe_backup() {
     fi
 }
 
+# 每天清理一次 TT 自己的旧日志
+maybe_cleanup() {
+    [ "$installed" = yes ] && unlocked || return
+    [ "$(state_get cleanup_day)" = "$day" ] && return
+    state_set cleanup_day "$day"
+    n=$(cleanup_tt "$(cfg cleanup_days 30)")
+    [ "$n" -gt 0 ] 2>/dev/null && log "清理了 TT 自己 $(cfg cleanup_days 30) 天以前的日志和错误记录：$n 个文件"
+}
+
+# 生成回复时手机太烫：提醒一次
+check_temp() {
+    lim=$(cfg temp_alert 45)
+    [ "$lim" -gt 0 ] 2>/dev/null && [ -z "$temp_alerted" ] || return
+    t=$(battery_temp)
+    [ -n "$t" ] && [ "$t" -ge "$lim" ] || return
+    temp_alerted=1
+    log "TT 生成回复时电池 ${t}°C（提醒线 ${lim}°C）"
+    alert "手机有点烫：电池 ${t}°C" "TT 正在生成回复。可以先放下手机、别边充电边用，或在 TT 里调低动画和美化效果。"
+}
+
 tick() {
     now=$(date +%s)
     if [ $((now - last_check)) -ge $CHECK ]; then
@@ -184,7 +230,8 @@ tick() {
     pids=$(pidof "$PKG" 2>/dev/null)
     gen=0
     [ -n "$pids" ] && generating && gen=1
-    if [ "$gen" = 1 ] && [ "$gen_prev" != 1 ]; then gen_alerted=""; net_alerted=""; gen_start=$now; fi
+    if [ "$gen" = 1 ] && [ "$gen_prev" != 1 ]; then gen_alerted=""; net_alerted=""
+temp_alerted=""; temp_alerted=""; gen_start=$now; fi
     [ "$gen" = 0 ] && [ "$gen_prev" = 1 ] && [ -n "$pids" ] && { gen_end; check_quota; }
 
     # 换了一天：日志只留 7 天
@@ -228,7 +275,10 @@ tick() {
         fi
     fi
 
+    [ "$gen" = 1 ] && check_temp
+
     maybe_backup
+    maybe_cleanup
 
     gen_prev=$gen
     prev_pids=$pids
@@ -244,6 +294,7 @@ main() {
         state_set last_exit "${first:-0}"
     fi
     [ -f "$CONFIG" ] || echo "$DEFAULT_CONFIG" > "$CONFIG"
+    config_fill
     log "开始运行（版本 $(sed -n 's/^version=//p' "$MODDIR/module.prop")）"
     while true; do
         tick

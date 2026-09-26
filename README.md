@@ -13,6 +13,11 @@
 | 自动重开 | 生成回复到一半被**系统**杀掉（内存不够、厂商清理等；你划掉或强制停止的不算）时 `am start` 打开 TT，10 分钟内最多一次 | — |
 | 每天备份 | 把 TT 的 `default-user` 打包到「内部存储/Documents/TauriTavern-backup」，留 7 份；**不含 API 密钥**（`secrets.json`）、TT 自己的备份、缩略图、日志 | 备份留着（是你的数据），不要可以自己删 |
 | 每日统计 | 生成几次、多久，冻结几次，被系统结束 / 被强制停止几次（`stats.txt`，留 8 天） | — |
+| 从备份恢复 | `restore.sh`（电脑菜单里选编号）：先另存现在的数据，再用备份覆盖；备份里没有的不删，API 密钥不动；TT 要先关掉 | — |
+| 崩溃记录 | TT 崩溃 / 没响应时，把系统崩溃记录、ANR 记录、TT 日志最后 200 行存进模块的 `crash/`，留 10 份，并发通知 | 随模块删除（电脑菜单会先拷回电脑） |
+| 清理 TT 旧日志 | 每天删一次 TT 自己 30 天以前的运行日志（`logs/tauritavern.log.日期`）和错误记录（`_errors`）；请求记录 TT 自己会清，不碰 | — |
+| 过热提醒 | 生成回复时电池 45°C 以上提醒一次 | — |
+| 浏览器内核记录 | 系统浏览器内核（WebView）版本变化时记一行（TT 靠它显示界面） | — |
 
 ## 关于冻结和查杀（实测，OnePlus PLC110 / Android 16 / TT 2.3.0）
 
@@ -32,9 +37,19 @@ backup=1        # 每天备份（0 关）
 backup_keep=7   # 备份留几份
 auto_reopen=1   # 被系统杀掉时自动重开（0 关）
 notify=1        # 发通知（0 关，只记日志）
+cleanup_days=30 # 清理 TT 多少天以前的日志（0 不清理）
+temp_alert=45   # 生成时电池到多少度提醒（0 不提醒）
 ```
 
+旧版本升级上来的 `config.txt` 会自动补上新开关，已有的不动。
+
 ## 从备份恢复
+
+**简单的办法**：电脑上酒馆工具的「安卓保活模块」，在「从备份恢复」那一步输入编号。它会提醒你先把 TT 划掉；恢复前模块自动把现在的数据另存一份，想撤销就再恢复那一份。
+
+也可以在手机上用有 root 的终端：`su -c 'sh /data/adb/modules/claudemax_tt_keepalive/restore.sh 备份文件名'`。
+
+**手动恢复**：
 
 1. 把 TT 关掉（最近任务里划掉）。
 2. 用有 root 权限的文件管理器（比如 MT 管理器；Android 11 起普通文件管理器进不了 `Android/data`）把备份（`.tar.gz`）解压，得到 `default-user` 文件夹。
@@ -53,15 +68,15 @@ Magisk：zip 里按 Magisk 文档带了 `META-INF`（安装器）和 `customize.
 
 ## 开发
 
-- `ksu-tt-keepalive/`：模块本体。`common.sh` 是共用函数，`service.sh` 开机后常驻，`action.sh` 是「执行」按钮，`uninstall.sh` 卸载时还原，`customize.sh` 升级时带上旧数据。
+- `ksu-tt-keepalive/`：模块本体。`common.sh` 是共用函数，`service.sh` 开机后常驻，`action.sh` 是「执行」按钮，`restore.sh` 从备份恢复，`uninstall.sh` 卸载时还原，`customize.sh` 升级时带上旧数据。
 - `sh tests/run.sh`：在 Mac 上用 dash / sh / ksh 各跑一遍单元测试。用 PATH 里的假命令代替 dumpsys / am / cmd / logcat 等，模块脚本不改一行地被测；样例数据在 `tests/fixtures/`，取自真机输出。
 - `ADB=adb路径 ANDROID_SERIAL=序列号 zsh tests/run-on-phone.sh`：同一组测试在手机上用真正的 mksh 和 busybox ash 跑（以 shell 身份，只用假命令，不改手机设置）。
 - 版本号在 `ksu-tt-keepalive/module.prop`（`version` 和 `versionCode` 一起加），改动写进 `CHANGELOG.md`。
 
-## 安全自查（1.4）
+## 安全自查（1.5）
 
 - **范围**：只动一个包名 `com.tauritavern.client`，写死在脚本里；没装 TT 时什么都不改。
-- **权限用途**：root 只用来执行上表的 Android 命令、读 cgroup 状态文件和系统日志、打包备份 TT 的数据、以 shell 身份（`su 2000`）发通知、自动重开时 `am start` TT。不写 `/proc`、不写 cgroup、不解冻。
+- **权限用途**：root 只用来执行上表的 Android 命令、读 cgroup 状态文件和系统日志、打包备份 TT 的数据、以 shell 身份（`su 2000`）发通知、自动重开时 `am start` TT、恢复备份时覆盖 TT 的数据（只在你主动运行 `restore.sh` 时）、删 TT 自己 30 天以前的运行日志和错误记录。不写 `/proc`、不写 cgroup、不解冻。
 - **备份**：只打包、不解析 TT 的数据；排除 `secrets.json`（API 密钥），因为「内部存储」里的文件有存储权限的应用都能读。备份只留在手机上，不上传。
 - **不做的事**：不联网、不下载、不含任何可执行文件或库；没有 `system/` 目录（不覆盖系统文件）；不改 SELinux 策略；不改系统属性（`resetprop`）；不改全局冻结器设置；除了打包备份 TT 自己的数据外不读取任何应用的数据，也不解析聊天内容；不装 LSPosed / Zygisk 钩子。
 - **外部输入**：只读系统命令的输出和 `config.txt` 里的开关；通知文字里的引号会被去掉再拼命令。日志只写模块自己目录里的 `service.log`（时间和发生了什么），留最近 7 天；`prior.txt` 只记四个设置的原值；`state.txt` 记退出记录读到哪、上次备份时间、TT 版本和 uid；`stats.txt` 只有数字。
@@ -69,4 +84,5 @@ Magisk：zip 里按 Magisk 文档带了 `META-INF`（安装器）和 `customize.
 - **副作用**：白名单和允许后台运行让 TT 息屏时网络不断，挂在后台时会比原来多耗一点电。
 - **回滚**：删除模块并重启即可。
 - **卸载**：设置还原；备份文件夹不删。
-- 打包出的 zip 只有文本文件：`module.prop`、`common.sh`、`service.sh`、`uninstall.sh`、`action.sh`、`customize.sh`，以及 Magisk 用的 `META-INF/com/google/android/update-binary`、`updater-script`，安装前可以用任何文本编辑器看一遍。
+- **恢复**：只接受本模块备份文件夹里、名字是 `tt-default-user-*.tar.gz` 的文件，里面只能有 `default-user/` 下的东西（没有绝对路径、没有 `..`）；恢复前先另存现在的数据。
+- 打包出的 zip 只有文本文件：`module.prop`、`common.sh`、`service.sh`、`uninstall.sh`、`action.sh`、`customize.sh`、`restore.sh`，以及 Magisk 用的 `META-INF/com/google/android/update-binary`、`updater-script`，安装前可以用任何文本编辑器看一遍。
