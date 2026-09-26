@@ -39,10 +39,16 @@ BUCKET=$(get bucket)
         cmd appops set "$pkg" RUN_ANY_IN_BACKGROUND "$(get "$pkg.RUN_ANY_IN_BACKGROUND")" >/dev/null 2>&1
     done
     # 私密位置的备份搬到共享位置（要等手机解锁：内部存储在解锁前是加密的）
-    if ls "$PRIVATE_BK"/*.tar.gz >/dev/null 2>&1; then
+    if ls "$PRIVATE_BK"/*.tar.gz >/dev/null 2>&1 || [ -d "$PRIVATE_BK/live" ]; then
         until [ "$(getprop sys.user.0.ce_available)" = true ]; do sleep 10; done
         mkdir -p "$SHARED_BK" && for f in "$PRIVATE_BK"/*; do [ -f "$f" ] && mv "$f" "$SHARED_BK/"; done
+        # 实时副本（目录）：已有同名的就加时间，不覆盖
+        if [ -d "$PRIVATE_BK/live" ]; then
+            to="$SHARED_BK/实时副本"; [ -e "$to" ] && to="$to-$(date +%Y%m%d-%H%M%S)"
+            mv "$PRIVATE_BK/live" "$to"
+        fi
         chown -R 1023:1023 "$SHARED_BK"; chmod 775 "$SHARED_BK"; find "$SHARED_BK" -maxdepth 1 -type f -exec chmod 664 {} +
+        find "$SHARED_BK" -mindepth 1 -type d -exec chmod 775 {} + 2>/dev/null; find "$SHARED_BK" -mindepth 2 -type f -exec chmod 664 {} + 2>/dev/null
         command -v chcon >/dev/null && chcon -R u:object_r:media_rw_data_file:s0 "$SHARED_BK"
         rmdir "$PRIVATE_BK"
         su 2000 -c "cmd notification post -S bigtext -t 'TT 守护已卸载' claudemax_tt_keepalive '备份已移至 内部存储/Documents/TauriTavern-backup'"

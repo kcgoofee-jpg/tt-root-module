@@ -2,7 +2,7 @@
 # 界面（webroot/index.html，在 KernelSU 管理器里打开）和电脑上的 mac/pull-backups.sh 用的命令，以 root 运行：
 #   ui.sh status              全部状态，输出 JSON
 #   ui.sh backup              马上备份一次（不管数据变没变），输出 JSON
-#   ui.sh restore 文件名      从备份恢复（调 restore.sh），输出 JSON
+#   ui.sh restore 文件名      从备份恢复（调 restore.sh），输出 JSON；live-tt 等表示从实时副本恢复
 #   ui.sh set 开关 数字       改 config.txt 里的一个开关（只认 CONFIG_KEYS 里的），输出 JSON
 #   ui.sh list-backups        给电脑用：每行「文件名 KB sha256」
 #   ui.sh mark-pulled [电脑名] 给电脑用：记下「电脑刚拷走了备份」和是哪台电脑
@@ -74,7 +74,8 @@ status() {
         pres=false; t_present "$t" && pres=true
         run=false; [ "$pres" = true ] && t_running "$t" && run=true
         [ $first = 1 ] || printf ','; first=0
-        printf '{"id":%s,"label":%s,"pkg":%s,"installed":%s,"present":%s,"running":%s,"last":%s,"check":%s,"fails":%s,"count":%s}'             "$(js "$t")" "$(js "$(t_label "$t")")" "$(js "$(t_pkg "$t")")" "$inst" "$pres" "$run"             "$(num "$(state_get "$(t_key "$t" last_backup)")")" "$(num "$(state_get "$(t_key "$t" last_backup_check)")")"             "$(num "$(state_get "$(t_key "$t" backup_fails)")")" "$(list_backups "$t" | wc -l | tr -d ' ')"
+        printf '{"id":%s,"label":%s,"pkg":%s,"installed":%s,"present":%s,"running":%s,"last":%s,"check":%s,"fails":%s,"count":%s,"live":%s,"live_files":%s}'             "$(js "$t")" "$(js "$(t_label "$t")")" "$(js "$(t_pkg "$t")")" "$inst" "$pres" "$run"             "$(num "$(state_get "$(t_key "$t" last_backup)")")" "$(num "$(state_get "$(t_key "$t" last_backup_check)")")"             "$(num "$(state_get "$(t_key "$t" backup_fails)")")" "$(list_backups "$t" | wc -l | tr -d ' ')" \
+            "$(num "$(state_get "$(t_key "$t" live)")")" "$(num "$(live_count "$t")")"
     done
     printf '],'
     printf '"backup":{"dir":%s,"last":%s,"check":%s,"fails":%s,"mac_pulled":%s,"pc_host":%s,"sync_request":%s,"watch_since":%s,"items":[' \

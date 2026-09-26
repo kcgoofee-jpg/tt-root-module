@@ -85,12 +85,15 @@ mac_alert_days=3
 auto_reopen=1
 # 出事时发通知
 notify=1
+# 实时副本：聊天等文件变化后，几分钟内把变化的文件复制一份（TT 每次生成完立即复制）
+live=1
+live_minutes=5
 # 清理 TT 自己多少天以前的运行日志和错误记录（0 = 不清理）
 cleanup_days=30
 # 生成回复时电池温度到多少度提醒（0 = 不提醒）
 temp_alert=45'
 # 界面上能改的开关（值只能是数字）
-CONFIG_KEYS="backup backup_hours backup_private keep_days keep_weeks keep_months mac_alert_days auto_reopen notify cleanup_days temp_alert"
+CONFIG_KEYS="backup backup_hours backup_private keep_days keep_weeks keep_months mac_alert_days auto_reopen notify cleanup_days temp_alert live live_minutes"
 
 # 旧版本升级上来的 config.txt：补上没有的新开关（已有的不动），去掉不再用的（backup_keep 换成了 keep_days）
 config_fill() {
@@ -382,18 +385,53 @@ EXCLUDES='*/secrets.json secrets.json */cookie-secret.txt cookie-secret.txt
 data/_cache data/_webpack data/_errors data/_uploads */node_modules'
 
 # 上次备份以后数据有没有变（有变化才值得再备份）。$1 目标
+# $1 目标，$2 时间标记文件（空 = 全部）：输出比它新的、会进备份的文件（相对 t_root 的路径）
+changed_files() (
+    root=$(t_root "$1"); cd "$root" 2>/dev/null || exit 0
+    for mem in $(t_members "$1"); do
+        [ -e "$mem" ] || continue
+        if [ -n "${2:-}" ]; then find "$mem" -type f -newer "$2" 2>/dev/null; else find "$mem" -type f 2>/dev/null; fi
+    done | grep -vE '(^|/)default-user/(backups|thumbnails|\.staging)/|/content\.log$|(^|/)secrets\.json$|(^|/)cookie-secret\.txt$|(^|/)data/_(cache|webpack|errors|uploads)/|/node_modules/'
+)
+
 data_changed() {
-    m=$(t_marker "$1"); root=$(t_root "$1")
+    m=$(t_marker "$1")
     [ -f "$m" ] || return 0
     [ -n "$(list_backups "$1" | grep -v prerestore | head -n 1)" ] || return 0   # 备份被删光了：当作有变化
-    for mem in $(t_members "$1"); do
-        [ -e "$root/$mem" ] || continue
-        find "$root/$mem" -type f -newer "$m" 2>/dev/null \
-            | grep -vE '/default-user/(backups|thumbnails|\.staging)/|/content\.log$|/secrets\.json$|/cookie-secret\.txt$|/data/_(cache|webpack|errors|uploads)/|/node_modules/' \
-            | grep -q . && return 0
-    done
-    return 1
+    changed_files "$1" "$m" | grep -q .
 }
+
+# 实时副本：每个酒馆一个目录（和酒馆的数据目录结构相同），只复制变化过的文件，不删除（酒馆里删掉的文件副本里还在）。
+# 总放在私密位置（只有 root 能读）；卸载时和备份一起移到共享位置。
+LIVE=${LIVE:-$PRIVATE_BK/live}
+live_dir() { echo "$LIVE/$1"; }
+# $1 目标：把变化的文件复制进副本。输出复制了几个文件；正在恢复、正在同步或复制出错时返回 1
+live_sync() (
+    t=$1; root=$(t_root "$t"); dst=$(live_dir "$t"); m=$dst/.marker
+    [ -d "$GDIR/.restore.lock" ] && exit 1
+    mkdir -p "$dst" && chmod 700 "$LIVE" 2>/dev/null || exit 1
+    lk=$GDIR/.live.lock
+    if ! mkdir "$lk" 2>/dev/null; then
+        [ -n "$(find "$lk" -maxdepth 0 -mmin +30 2>/dev/null)" ] || exit 1
+        rm -rf "${lk:?}"; mkdir "$lk" || exit 1
+    fi
+    trap 'rm -rf "${lk:?}"' EXIT
+    touch "$m.new"
+    since=""; [ -f "$m" ] && since=$m
+    n=0; err=0
+    changed_files "$t" "$since" > "$m.list"
+    while IFS= read -r f; do
+        mkdir -p "$dst/${f%/*}" 2>/dev/null
+        # 先复制到临时名再改名：复制途中断电，副本里不会是半个文件
+        if cp -p "$root/$f" "$dst/$f.part" 2>/dev/null && mv "$dst/$f.part" "$dst/$f"; then n=$((n + 1)); else rm -f "$dst/$f.part"; err=1; fi
+    done < "$m.list"
+    rm -f "$m.list"
+    [ $err = 0 ] && mv "$m.new" "$m" || rm -f "$m.new"
+    echo $n
+    [ $err = 0 ]
+)
+# 副本里有多少文件（没有副本时输出 0）；上次同步时间记在状态文件（t_key 目标 live）
+live_count() { find "$(live_dir "$1")" -type f ! -name '.marker*' 2>/dev/null | wc -l | tr -d ' '; }
 
 # 备份一个目标，做完马上校验（完整读一遍、里面要有用户数据、不能有密钥文件），再写 .sha256 给电脑核对。
 # $1 目标（默认 tt），$2 = prerestore 表示「恢复前自动存的那份」。

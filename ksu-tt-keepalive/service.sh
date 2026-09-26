@@ -212,6 +212,31 @@ maybe_backup() {
     done
 }
 
+# 实时副本：TT 每次生成完立即复制变化的文件，其余时间（和其他酒馆）每 live_minutes 分钟一次。
+# 只复制变化过的文件，通常只有几个聊天文件，耗时很短
+maybe_live() {
+    [ "$(cfg backup 1)" = 1 ] && [ "$(cfg live 1)" = 1 ] && unlocked || return
+    mins=$(cfg live_minutes 5); [ "$mins" -ge 1 ] 2>/dev/null || mins=5
+    for tg in $(present_targets); do
+        k=$(t_key "$tg" live); last=$(state_get "$k"); last=${last:-0}
+        if [ "$tg" = tt ]; then
+            [ "$installed" = yes ] && [ "$gen" = 0 ] || continue
+            [ "$gen_prev" = 1 ] || [ $((now - last)) -ge $((mins * 60)) ] || continue
+        else
+            [ $((now - last)) -ge $((mins * 60)) ] || continue
+        fi
+        space_ok "$tg" || continue
+        [ -d "$GDIR/.restore.lock" ] && continue
+        if lv_n=$(live_sync "$tg"); then
+            state_set "$k" "$now"
+            [ "$last" = 0 ] && log "已建立 $(t_label "$tg") 的实时副本（$lv_n 个文件）"
+        elif [ $((now - live_fail_log)) -ge 3600 ]; then
+            log "$(t_label "$tg") 实时副本复制失败，稍后重试"
+            live_fail_log=$now
+        fi
+    done
+}
+
 # 开机后（手机解锁后）检查一次：断电、没电关机可能留下写到一半的备份，或中断的恢复
 after_boot() {
     for n in $(check_backups); do
@@ -381,6 +406,7 @@ tick() {
     fi
 
     maybe_backup
+    maybe_live
     check_stale
     maybe_cleanup
 
@@ -424,4 +450,5 @@ migrated=""
 disabled_logged=""
 rescued=""
 power_prev=""
+live_fail_log=0
 [ "${TT_KEEPALIVE_TEST:-}" = 1 ] || main

@@ -9,7 +9,7 @@ $phone = Join-Path $T 'phone'; $mod = Join-Path $phone 'mod'; $bk = Join-Path $p
 New-Item -ItemType Directory -Force -Path $mod, $bk, (Join-Path $phone 'data\default-user') | Out-Null
 Copy-Item (Join-Path $Root 'ksu-tt-keepalive\*') $mod -Recurse
 $env:PHONE_MOD = & $u $mod; $env:TT_MODDIR = & $u $mod; $env:TT_GUARD_DIR = & $u $mod
-$env:PRIVATE_BK = & $u $bk; $env:PULL_DIR = & $u (Join-Path $phone 'tt-pull'); $env:TT_DATA = & $u (Join-Path $phone 'data')
+$env:PRIVATE_BK = & $u $bk; $env:FAKE_PULL = & $u (Join-Path $phone 'tt-pull'); $env:TT_DATA = & $u (Join-Path $phone 'data')
 $env:FAKE_SERIAL = 'USB123'
 $Adb = Join-Path $Root 'tests\win-fake-adb.cmd'
 $Dest = Join-Path $T '电脑 上的 备份'
@@ -33,7 +33,7 @@ Check '两份都拷到了（路径有空格和中文）' ((Test-Path $f0) -and (
 $want = if (Test-Path "$f0.sha256") { ((Get-Content "$f0.sha256") -split '\s+')[0] } else { '' }
 $got = if (Test-Path $f0) { (Get-FileHash $f0 -Algorithm SHA256).Hash.ToLower() } else { 'none' }
 Check 'sha256 对得上（二进制安全）' ($want -eq $got)
-Check '手机记下已同步' ((Get-Content (Join-Path $mod 'state.txt') -Raw) -match 'mac_pulled=')
+Check '手机记下已同步' ([string](Get-Content (Join-Path $mod 'state.txt') -Raw -ErrorAction SilentlyContinue) -match 'mac_pulled=')
 Check '再跑一次：成功' ((Run) -eq 0)
 Mkbk "$d0-200000"
 $env:FAKE_CORRUPT = '1'

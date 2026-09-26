@@ -1,11 +1,19 @@
 name: test
 on: [push, pull_request, workflow_dispatch]
+env:
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
 jobs:
   mac:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: sh tests/run.sh
+      - name: debug on failure
+        if: failure()
+        run: |
+          echo "PATH=$PATH"; for c in date sed awk grep tar find stat sort wc; do echo "$c -> $(command -v $c)"; done
+          cd tests && TESTS_DIR=$PWD TEST_BIN=$(mktemp -d) dash -x cases.sh 2>&1 | grep -B40 -m1 'KernelSU 带版本' | tail -60
   windows:
     runs-on: windows-latest
     steps:

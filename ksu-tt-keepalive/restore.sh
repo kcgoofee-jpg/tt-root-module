@@ -12,12 +12,21 @@
 MODDIR=${TT_MODDIR:-${0%/*}}
 . "$MODDIR/common.sh"
 
+# 参数 live-tt / live-sillydroid / live-termux：从实时副本恢复（副本本身就是目录，不用解压）
 name=${1##*/}
-is_bk_name "$name" || { echo "不是本模块的备份文件：$1"; exit 2; }
-case "$name" in *..*|*/*) echo "不是本模块的备份文件：$1"; exit 2 ;; esac
-t=$(t_of_name "$name"); root=$(t_root "$t"); label=$(t_label "$t")
-f=$(bdir)/$name
-[ -f "$f" ] || { echo "找不到备份：$f"; exit 2; }
+live=""
+case "$name" in live-tt|live-sillydroid|live-termux) live=${name#live-} ;; esac
+if [ -n "$live" ]; then
+    t=$live; f=$(live_dir "$t")
+    [ -f "$f/.marker" ] || { echo "没有实时副本"; exit 2; }
+else
+    is_bk_name "$name" || { echo "不是本模块的备份文件：$1"; exit 2; }
+    case "$name" in *..*|*/*) echo "不是本模块的备份文件：$1"; exit 2 ;; esac
+    t=$(t_of_name "$name")
+    f=$(bdir)/$name
+    [ -f "$f" ] || { echo "找不到备份：$f"; exit 2; }
+fi
+root=$(t_root "$t"); label=$(t_label "$t")
 [ -d "$root" ] || { echo "没有找到 $label 的数据目录，请先安装并打开一次"; exit 2; }
 t_running "$t" && { echo "$label 正在运行：请先在最近任务中关闭 $label"; exit 3; }
 unlocked || { echo "手机开机后还没解锁过，先解锁再恢复"; exit 4; }
@@ -31,31 +40,37 @@ fi
 trap 'rm -rf "${lock:?}"' EXIT
 
 # 备份有 .sha256 就先核对，坏了就不恢复
-if [ -s "$f.sha256" ]; then
+if [ -z "$live" ] && [ -s "$f.sha256" ]; then
     want=$(cut -d' ' -f1 "$f.sha256")
     got=$( { sha256sum "$f" 2>/dev/null || shasum -a 256 "$f"; } | cut -d' ' -f1)
     [ "$want" = "$got" ] || { echo "备份文件校验不对，可能已损坏，不恢复"; exit 9; }
 fi
 
 # 空间：要放得下解开的数据和恢复前的备份
-kb=$(du -k "$f" 2>/dev/null | cut -f1); fr=$(free_kb "$root")
+kb=$(du -sk "$f" 2>/dev/null | cut -f1); fr=$(free_kb "$root")
 if [ -n "$fr" ] && [ "$fr" -lt $(( ${kb:-60000} * 5 + 512000 )) ]; then
     echo "存储空间不够（剩 $(human_kb "$fr")），不恢复"; exit 8
 fi
 
 # 备份里只能有这个目标的那几个目录下的东西，不能有绝对路径或 ..
-allowed=$(t_members "$t" | sed 's/ /|/g; s/\./\\./g')
-bad=$(tar -tzf "$f" 2>/dev/null | grep -vE "^($allowed)(/|\$)" | head -n 1)
-[ -z "$bad" ] || { echo "备份内容不对（$bad），不恢复"; exit 2; }
-tar -tzf "$f" 2>/dev/null | grep -qE '(^|/)\.\.(/|$)' && { echo "备份里有 ..，不恢复"; exit 2; }
-
-stage=$root/.cc-restore
-rm -rf "${stage:?}"; mkdir -p "$stage" || exit 6
-tar -xzf "$f" -C "$stage" 2>/dev/null && [ -n "$(find "$stage" -type d -name default-user | head -n 1)" ] \
-    || { rm -rf "${stage:?}"; echo "解压失败"; exit 6; }
+# 实时副本不用解压：直接从副本目录复制（drop_stage 不删它）
+drop_stage() { [ -n "$live" ] || rm -rf "${stage:?}"; }
+if [ -n "$live" ]; then
+    stage=$f
+    [ -n "$(find "$stage" -type d -name default-user | head -n 1)" ] || { echo "实时副本里没有用户数据，不恢复"; exit 2; }
+else
+    allowed=$(t_members "$t" | sed 's/ /|/g; s/\./\\./g')
+    bad=$(tar -tzf "$f" 2>/dev/null | grep -vE "^($allowed)(/|\$)" | head -n 1)
+    [ -z "$bad" ] || { echo "备份内容不对（$bad），不恢复"; exit 2; }
+    tar -tzf "$f" 2>/dev/null | grep -qE '(^|/)\.\.(/|$)' && { echo "备份里有 ..，不恢复"; exit 2; }
+    stage=$root/.cc-restore
+    rm -rf "${stage:?}"; mkdir -p "$stage" || exit 6
+    tar -xzf "$f" -C "$stage" 2>/dev/null && [ -n "$(find "$stage" -type d -name default-user | head -n 1)" ] \
+        || { rm -rf "${stage:?}"; echo "解压失败"; exit 6; }
+fi
 
 if ! safety=$(backup_now "$t" prerestore); then
-    rm -rf "${stage:?}"; echo "恢复前先备份现在的数据，失败了，不恢复"; exit 5
+    drop_stage; echo "恢复前先备份现在的数据，失败了，不恢复"; exit 5
 fi
 log "恢复前自动备份了现在的数据：${safety##*/}"
 
@@ -64,7 +79,7 @@ ud=$(t_userdir "$t")
 owner=$(stat -c %u "$ud" 2>/dev/null); group=$(stat -c %g "$ud" 2>/dev/null)
 ctx=$(ls -Zd "$ud" 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^u:object_r:/) { print $i; exit } }')
 # 解压、另存花了点时间：覆盖前再确认一次 TT 没被打开
-t_running "$t" && { rm -rf "${stage:?}"; echo "$label 刚被打开：请先在最近任务中关闭 $label"; exit 3; }
+t_running "$t" && { drop_stage; echo "$label 刚被打开：请先在最近任务中关闭 $label"; exit 3; }
 echo "$name|${safety##*/}" > "$GDIR/restore.pending"; sync
 copied=1
 for m in $(t_members "$t"); do
@@ -80,7 +95,7 @@ for m in $(t_members "$t"); do
 done
 sync; rm -f "$GDIR/restore.pending"
 if [ $copied = 1 ]; then
-    rm -rf "${stage:?}"
+    drop_stage
     state_set restore_interrupted ""
     log "从备份恢复了 $label 数据：$name"
     echo "已恢复：$name"
@@ -88,7 +103,7 @@ if [ $copied = 1 ]; then
     echo "恢复前的数据另存为：${safety##*/}"
     exit 0
 fi
-rm -rf "${stage:?}"
+drop_stage
 log "从备份恢复失败（复制时出错）：$name；恢复前的备份在 ${safety##*/}"
 echo "复制失败。恢复前的数据在 ${safety##*/}，可以用它恢复回去"
 exit 6
