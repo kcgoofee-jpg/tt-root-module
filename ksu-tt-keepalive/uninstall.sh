@@ -34,7 +34,9 @@ BUCKET=$(get bucket)
         until [ "$(getprop sys.user.0.ce_available)" = true ]; do sleep 10; done
         mkdir -p "$SHARED_BK" && for f in "$PRIVATE_BK"/tt-default-user-*; do mv "$f" "$SHARED_BK/"; done
         chown -R 1023:1023 "$SHARED_BK"; chmod 775 "$SHARED_BK"; chmod 664 "$SHARED_BK"/tt-default-user-*
+        command -v chcon >/dev/null && chcon -R u:object_r:media_rw_data_file:s0 "$SHARED_BK"
         rmdir "$PRIVATE_BK"
+        su 2000 -c "cmd notification post -S bigtext -t 'TT 守护已卸载' claudemax_tt_keepalive '备份已移至 内部存储/Documents/TauriTavern-backup'"
     fi
     # 模块发过的通知撤掉不了（Android 没这个命令），留着的可以手动划掉
 ) </dev/null >/dev/null 2>&1 &

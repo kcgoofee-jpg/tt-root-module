@@ -12,7 +12,8 @@ echo "待机分组：$b（$m）"
 uid=$(app_uid)
 n=$(net_effective "$uid")
 case "$n" in NONE) echo "网络：没被限制" ;; '') echo "网络：看不到（TT 没在运行时正常）" ;; *) echo "网络：被限制（$n）" ;; esac
-t=$(battery_temp); [ -n "$t" ] && echo "电池温度：${t}°C"
+t=$(battery_temp); c=$(soc_temp); b=$(board_temp)
+[ -n "$t$c$b" ] && echo "温度：电池 ${t:-—}°C，处理器 ${c:-—}°C，主板 ${b:-—}°C"
 echo "TT 版本：$(tt_version)；系统浏览器内核：$(webview_version)"
 
 pids=$(pidof "$PKG" 2>/dev/null)

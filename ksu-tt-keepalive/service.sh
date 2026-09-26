@@ -102,7 +102,7 @@ report_exits() {
         [ -n "$rec" ] || continue
         log "$(exit_line "$rec")"
         r=$(echo "$rec" | cut -d'|' -f3)
-        if system_kill "$r"; then
+        if system_kill "$r" "$(echo "$rec" | cut -d'|' -f4)"; then
             stat_add 6 1
             src=$(kill_source "$(echo "$rec" | cut -d'|' -f2)")
             [ -n "$src" ] && log "  系统日志：$src"
@@ -111,7 +111,7 @@ report_exits() {
         elif crash_reason "$r"; then
             cd_=$(save_crash "$rec")
             [ -n "$cd_" ] && log "  已保存崩溃记录：crash/${cd_##*/}"
-            alert "TT $(exit_reason_zh "$r")" "系统的崩溃记录和 TT 日志已存进模块的 crash 文件夹，电脑上的「安卓保活模块」菜单会拷回电脑。"
+            alert "TauriTavern 异常退出" "$(exit_reason_zh "$r")。已保存崩溃记录。"
         fi
         echo "$rec"
     done > "$STATE.exits"
@@ -120,23 +120,24 @@ report_exits() {
     if [ -n "$died_in_gen" ]; then
         gen_end; check_quota
         rec=$(grep "^[^|]*|$died_in_gen|" "$STATE.exits" | tail -n 1)
-        r=$(echo "$rec" | cut -d'|' -f3)
+        r=$(echo "$rec" | cut -d'|' -f3); sr=$(echo "$rec" | cut -d'|' -f4)
         if [ -n "$rec" ]; then
-            why=$(exit_reason_zh "$r" "$(echo "$rec" | cut -d'|' -f4)")
+            why=$(exit_reason_zh "$r" "$sr")
         else
             why="系统没记原因"; r=unknown
             log "TT（$died_in_gen）生成回复时进程没了，系统没记原因"
         fi
-        extra="打开 TT 后，Claude Max 代理会补回暂存的回复。"
-        if { system_kill "$r" || [ "$r" = unknown ]; } && [ "$(cfg auto_reopen 1)" = 1 ] \
+        extra="重新打开后可补回暂存的回复。"
+        if { system_kill "$r" "${sr:-}" || [ "$r" = unknown ]; } && [ "$(cfg auto_reopen 1)" = 1 ] \
+            && [ ! -d "$MODDIR/.restore.lock" ] \
             && [ $((now - last_reopen)) -ge $REOPEN_GAP ]; then
             if am start -n "$PKG/.MainActivity" >/dev/null 2>&1; then
                 last_reopen=$now
                 log "已自动重新打开 TT"
-                extra="已自动重新打开 TT，Claude Max 代理会补回暂存的回复。"
+                extra="已自动重新打开。"
             fi
         fi
-        alert "TT 生成回复到一半进程没了" "原因：$why。$extra"
+        alert "TauriTavern 在生成中退出" "原因：$why。$extra"
     fi
     rm -f "$STATE.exits"
 }
@@ -156,7 +157,7 @@ check_quota() {
     [ "$(state_get quota_day)" = "$(date +%m-%d)" ] && return
     state_set quota_day "$(date +%m-%d)"
     log "今天生成累计 $(human_secs "$secs")，快到 Android 的前台服务上限（每 24 小时约 6 小时）"
-    alert "TT 今天生成已累计 $(human_secs "$secs")" "Android 限制这类后台生成每 24 小时约 6 小时，超过后 TT 在后台可能停住，放前台就没事。"
+    alert "今日生成时长已达 $(human_secs "$secs")" "系统限制后台生成每 24 小时约 6 小时，超出后请在前台使用。"
 }
 
 # 备份：TT 数据有变化、离上次够 backup_hours 小时、没在生成、手机解锁过，才备份；失败 1 小时后再试
@@ -169,6 +170,14 @@ maybe_backup() {
     tried=$(state_get backup_try); tried=${tried:-0}
     [ $((now - lb)) -ge $((hrs * 3600)) ] && [ $((now - chk)) -ge $((hrs * 3600)) ] \
         && [ $((now - tried)) -ge 3600 ] || return
+    if ! space_ok; then
+        if [ "$(state_get space_day)" != "$day" ]; then
+            state_set space_day "$day"
+            log "存储空间不足，暂停自动备份（剩 $(human_kb "$(free_kb "$(bdir)")")）"
+            alert "存储空间不足，已暂停备份" "剩余 $(human_kb "$(free_kb "$(bdir)")")。清理空间后自动恢复。"
+        fi
+        return
+    fi
     if ! data_changed; then
         state_set last_backup_check "$now"     # 数据没变，现有的备份就是最新的
         return
@@ -178,12 +187,13 @@ maybe_backup() {
         state_set last_backup "$now"; state_set last_backup_check "$now"; state_set backup_fails 0
         kb=$(du -k "$bf" 2>/dev/null | cut -f1)
         dropped=$(apply_retention | wc -l | tr -d ' ')
+        prune_prerestore >/dev/null
         extra=""; [ "$dropped" -gt 0 ] 2>/dev/null && extra="；按分层保留清掉 $dropped 份旧的"
         log "已备份并校验 TT 数据：${bf##*/}（$kb KB，不含 API 密钥）$extra"
     else
         fails=$(( $(state_get backup_fails) + 1 )); state_set backup_fails "$fails"
         log "备份 TT 数据失败（连续第 $fails 次），1 小时后再试"
-        [ "$fails" = 3 ] && alert "TT 备份连续失败 3 次" "在 KernelSU 里打开本模块的界面看看；先看手机空间够不够。"
+        [ "$fails" = 3 ] && alert "备份连续失败 3 次" "请在 KernelSU 中打开 TT 守护查看详情。"
     fi
 }
 
@@ -195,7 +205,7 @@ check_stale() {
     if [ $((now - ok)) -ge 172800 ] && [ "$(state_get stale_day)" != "$day" ]; then
         state_set stale_day "$day"
         log "已经 $(( (now - ok) / 86400 )) 天没备份成功了"
-        alert "TT 已经 $(( (now - ok) / 86400 )) 天没备份成功了" "在 KernelSU 里打开本模块的界面看看原因。"
+        alert "$(( (now - ok) / 86400 )) 天未备份" "请在 KernelSU 中打开 TT 守护查看详情。"
     fi
     md=$(cfg mac_alert_days 3)
     [ "$md" -gt 0 ] 2>/dev/null && [ -n "$(list_backups | head -n 1)" ] || return
@@ -203,7 +213,7 @@ check_stale() {
     if [ $((now - mp)) -ge $((md * 86400)) ] && [ "$(state_get macstale_day)" != "$day" ]; then
         state_set macstale_day "$day"
         log "已经 $(( (now - mp) / 86400 )) 天没把备份拷到电脑"
-        alert "已经 $(( (now - mp) / 86400 )) 天没把备份拷到电脑" "手机丢了或坏了，只在手机上的备份也会没。连上电脑（数据线或无线调试），电脑会自动拷。"
+        alert "$(( (now - mp) / 86400 )) 天未同步到电脑" "备份仅存于本机。连接电脑后将自动同步。"
     fi
 }
 
@@ -224,7 +234,7 @@ check_temp() {
     [ -n "$t" ] && [ "$t" -ge "$lim" ] || return
     temp_alerted=1
     log "TT 生成回复时电池 ${t}°C（提醒线 ${lim}°C）"
-    alert "手机有点烫：电池 ${t}°C" "TT 正在生成回复。可以先放下手机、别边充电边用，或在 TT 里调低动画和美化效果。"
+    alert "电池温度 ${t}°C" "生成期间温度偏高。"
 }
 
 tick() {
@@ -235,8 +245,14 @@ tick() {
     fi
 
     pids=$(pidof "$PKG" 2>/dev/null)
+    # 省电：TT 冻着、上一轮也没在生成，就不去问系统（冻着的进程不可能开始生成）
+    idle_frozen=""
+    if [ -n "$pids" ] && [ "$gen_prev" != 1 ]; then
+        idle_frozen=1
+        for p in $pids; do [ -n "$(frozen_by "$p" "$uid")" ] || idle_frozen=""; done
+    fi
     gen=0
-    [ -n "$pids" ] && generating && gen=1
+    [ -n "$pids" ] && [ -z "$idle_frozen" ] && generating && gen=1
     if [ "$gen" = 1 ] && [ "$gen_prev" != 1 ]; then gen_alerted=""; net_alerted=""
 temp_alerted=""; temp_alerted=""; gen_start=$now; fi
     [ "$gen" = 0 ] && [ "$gen_prev" = 1 ] && [ -n "$pids" ] && { gen_end; check_quota; }
@@ -259,7 +275,7 @@ temp_alerted=""; temp_alerted=""; gen_start=$now; fi
                 stat_add 5 1
                 log "TT（$pid）被 $by 冻结了（正在生成回复）"
                 if [ -z "$gen_alerted" ]; then
-                    alert "TT 生成回复时被 $by 冻结了" "回复可能停住。打开 TT 就会解冻；Claude Max 代理会暂存回复。"
+                    alert "TauriTavern 在生成中被冻结" "冻结方：$by。打开应用即可恢复。"
                     gen_alerted=1
                 fi
             else
@@ -277,7 +293,7 @@ temp_alerted=""; temp_alerted=""; gen_start=$now; fi
         n=$(net_effective "$uid")
         if [ -n "$n" ] && [ "$n" != NONE ]; then
             log "TT 生成回复时网络被限制（$n）"
-            alert "TT 生成回复时网络被系统限制了" "限制：$n。回复可能收不到，打开 TT 看看。"
+            alert "TauriTavern 在生成中网络受限" "限制类型：$n。"
             net_alerted=1
         fi
     fi
@@ -313,7 +329,7 @@ main() {
     log "开始运行（版本 $(sed -n 's/^version=//p' "$MODDIR/module.prop")）"
     while true; do
         tick
-        if [ -n "$pids" ]; then sleep $FAST; else sleep $SLOW; fi
+        if [ -n "$pids" ] && [ -z "$idle_frozen" ]; then sleep $FAST; else sleep $SLOW; fi
     done
 }
 
@@ -326,6 +342,7 @@ gen_prev=0
 gen_alerted=""
 net_alerted=""
 gen_start=""
+idle_frozen=""
 frozen_since=""
 last_reopen=0
 last_day=""

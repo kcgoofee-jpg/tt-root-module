@@ -1,6 +1,6 @@
 id=claudemax_tt_keepalive
-name=TauriTavern 后台保活（Claude Max）
-version=1.5
-versionCode=8
+name=TT 守护（TauriTavern 备份 · 保活）
+version=1.6
+versionCode=9
 author=SillyTavern-ClaudeMax
-description=只针对 TauriTavern（com.tauritavern.client）：免电池优化、允许后台运行；每天备份 TT 数据（不含 API 密钥）并可一键恢复；生成中被冻结、被杀、断网、过热时发通知，被系统杀掉自动重开；崩溃时留存记录；自动清理 TT 旧日志；记录冻结、退出原因和每日统计。不联网、不含二进制，卸载时还原设置。
+description=TauriTavern 数据保护：自动备份（有变化最多每 6 小时，校验，日/周/月分层保留，私密存储，不含 API 密钥），一键恢复，同步到电脑（Mac / Windows），异常通知与诊断；附带保活设置。离线运行，卸载时还原设置。在 KernelSU 中点击模块可打开界面。

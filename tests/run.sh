@@ -11,4 +11,8 @@ for s in dash sh ksh; do
     echo "== $s"
     "$s" ./cases.sh || rc=1
 done
+if command -v zsh >/dev/null 2>&1; then
+    echo "== 电脑端（pc/pull-backups.sh）"
+    zsh ./pc-cases.zsh || rc=1
+fi
 exit $rc

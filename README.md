@@ -1,88 +1,110 @@
-# TauriTavern 后台保活（KernelSU 模块）
+# TT 守护（KernelSU 模块）
 
-手机上的 TauriTavern（TT，`com.tauritavern.client`）退到后台时，系统可能冻结它、在内存紧张时杀掉它。这个模块只对 TT 做几件 Android 自带的事，每天备份 TT 的数据，把「TT 为什么停了」记清楚，生成回复中出事时发通知、被系统杀掉时自动重开。
+为手机上的 TauriTavern（TT，`com.tauritavern.client`）提供数据保护和运行诊断：自动备份、校验、分层保留、同步到电脑（Mac / Windows）、一键恢复、异常通知；附带保活设置。离线运行，只作用于 TT 一个应用。
 
-| 做什么 | 怎么做 | 卸载后 |
+## 定位
+
+TT 的后端在 App 进程内。2.3.0 起生成回复时自带前台服务，不会被 Android 冻结；空闲时被冻结属于正常省电，不影响数据。与 Termux 中常驻的 SillyTavern 服务不同，TT 不依赖常驻保活。因此本模块以**数据安全和诊断**为主，保活设置作为补充。
+
+实测（OnePlus PLC110 / Android 16 / KernelSU 3.3.0）：一天内 TT 的 8 次重启均为 `am force-stop`（电脑端工具触发），没有系统查杀。
+
+## 功能
+
+| 类别 | 内容 |
+|---|---|
+| 备份 | 数据有变化时最多每 6 小时一次；生成中、开机未解锁、存储空间不足时不备份。完成后立即校验（完整读取、确认不含 `secrets.json`），并写 `.sha256`。 |
+| 备份范围 | `default-user`（聊天、角色卡、世界书、设置）、`extensions`、`_cm_archive`、`_css`、`_tauritavern`。不含任何位置的 `secrets.json`（API 密钥）、TT 自带备份、缩略图、日志、缓存。 |
+| 分层保留 | 最新一份和近 2 天全部保留；之后每天 / 每周 / 每月各留最新一份（默认 7 天 / 4 周 / 6 个月）。系统时间异常跳变时不删除。恢复前自动保存的备份单独保留最新 3 份。每份约 45 MB，总占用约 1 GB。 |
+| 存储位置 | 默认 `/data/adb/tt-backups`（仅 root 可读）；可切换到「内部存储/Documents/TauriTavern-backup」。卸载模块时私密备份移至共享位置。 |
+| 同步到电脑 | 电脑端定时任务每 30 分钟从手机拉取新备份并核对 sha256，电脑上按 14 天 / 8 周 / 24 个月保留。手机端超过 3 天未同步时提醒。 |
+| 恢复 | 界面或电脑菜单中选择备份。校验 sha256、检查空间、加锁，恢复前自动保存当前数据；备份之后新建的内容不删除；API 密钥不受影响。TT 运行时拒绝恢复（不会强制停止 TT）。 |
+| 异常通知 | 生成中被冻结、进程退出、网络受限、电池过热；备份连续失败、超过 2 天未备份、存储空间不足；TT 崩溃（同时保存崩溃记录）。 |
+| 诊断 | 冻结 / 解冻记录、退出原因（ApplicationExitInfo）、每日统计、温度（电池 / 处理器 / 主板）、TT 与 WebView 版本变化、自检、导出诊断包。 |
+| 保活设置 | 电池优化白名单、允许后台运行、待机分组不低于「活跃」；每 10 分钟核对；卸载时还原为安装前的值。 |
+| 其他 | 生成中被系统结束时自动重开 TT（最近任务中划掉的除外，10 分钟内最多一次）；每天清理 TT 自身 30 天前的运行日志和错误记录。 |
+
+## 界面
+
+KernelSU 管理器 → 模块 → 点击「TT 守护」打开。首屏显示运行状态、最近备份、电脑同步和 TT 状态；备份列表、恢复、诊断（统计、退出记录、占用空间、自检、导出诊断包）、设置、日志依次展开。设置即时生效，无需重启。
+
+模块卡片上的「执行」按钮输出同样信息的文本版本。
+
+## 安装与更新
+
+1. 构建：`zsh build-ksu-module.sh`（先运行全部测试），产物为 `dist/claudemax-tt-keepalive-<版本>.zip`。电脑端「安卓保活模块」菜单会构建并推送到手机的「下载」。
+2. 手机：KernelSU 管理器 → 模块 → 从本地安装 → 选择 zip → 重启。升级时保留原值、状态、统计、设置和日志。
+3. KernelSU 的模块更新需要重启才会生效，这是 KernelSU 的机制；界面和设置的改动不需要重启。
+
+卸载：在 KernelSU 管理器中删除模块并重启。开机完成后还原保活设置；解锁后把私密备份移到「内部存储/Documents/TauriTavern-backup」并发送通知。
+
+## 电脑端同步
+
+前提：手机已开启 USB 调试或无线调试，KernelSU 中已授予 Shell（`com.android.shell`）root 权限。注意：授权后，任何被手机信任的电脑都可以通过 adb 获得 root。
+
+**Mac**
+
+```bash
+zsh pc/install-mac.sh
+```
+
+每 30 分钟运行一次 `pc/pull-backups.sh`（launchd，登录时也运行）。备份保存在 `tavern/phone-backups/tt`，可用 `TT_PHONE_BACKUP_DIR` 修改。卸载：`zsh pc/install-mac.sh --uninstall`。
+
+**Windows**（PowerShell 5.1，Windows 10 / 11 自带，不需要管理员权限）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File pc\install-windows.ps1
+```
+
+每 30 分钟运行一次 `pc\pull-backups.ps1`（任务计划，登录时也运行）。备份保存在「文档\TT-phone-backups」，可用 `-Dest` 修改。adb 查找顺序：`-Adb` 参数、`tavern\tools\platform-tools\adb.exe`、PATH。卸载：加 `-Uninstall`。
+
+两个平台共用同一套逻辑：只拉取电脑上没有的备份，经手机中转目录 `adb pull`（二进制安全），核对 sha256 后才保存；保留规则由手机端计算（`ui.sh plan`）；全部成功后通知手机「已同步」；连续 3 天未同步时发送系统通知；运行记录在备份目录的 `pull.log`。
+
+## 设置
+
+保存在模块目录的 `config.txt`，可在界面中修改。值必须是数字；无效的值按默认值处理，并在自检中列出。
+
+| 键 | 默认 | 说明 |
 |---|---|---|
-| 电池优化白名单：息屏打盹（Doze）时网络不断 | `dumpsys deviceidle whitelist +包名`，每 10 分钟核对，丢了就补（比如重装过 TT） | 还原成装模块前的样子（原来不在白名单就撤掉） |
-| 允许后台运行 | `cmd appops set 包名 RUN_IN_BACKGROUND / RUN_ANY_IN_BACKGROUND allow`，同样每 10 分钟核对 | 还原成装模块前的值 |
-| 待机分组不掉下去 | 只在被系统降到「活跃」（10）以下时 `am set-standby-bucket 包名 active`；在白名单里时是 5「豁免」，不去碰 | 模块改过的话还原成原来的分组 |
-| 冻结记录（只看） | TT 被 Android（cgroup v2 `cgroup.events` 的 `frozen 1`）或 ColorOS（`/dev/freezer/frozen`）冻结、解冻时记一行，含冻了多久、当时是否在生成回复 | — |
-| 退出原因（只看） | TT 进程没了时读 `dumpsys activity exit-info`，把原因翻成人话记一行 | — |
-| 出事通知 | TT **正在生成回复**时被冻结、进程没了或网络被限制，发一条通知（同一次生成只提醒一次）；当天生成累计满 5 小时提醒一次 | 发过的通知手动划掉 |
-| 自动重开 | 生成回复到一半被**系统**杀掉（内存不够、厂商清理等；你划掉或强制停止的不算）时 `am start` 打开 TT，10 分钟内最多一次 | — |
-| 每天备份 | 把 TT 的 `default-user` 打包到「内部存储/Documents/TauriTavern-backup」，留 7 份；**不含 API 密钥**（`secrets.json`）、TT 自己的备份、缩略图、日志 | 备份留着（是你的数据），不要可以自己删 |
-| 每日统计 | 生成几次、多久，冻结几次，被系统结束 / 被强制停止几次（`stats.txt`，留 8 天） | — |
-| 从备份恢复 | `restore.sh`（电脑菜单里选编号）：先另存现在的数据，再用备份覆盖；备份里没有的不删，API 密钥不动；TT 要先关掉 | — |
-| 崩溃记录 | TT 崩溃 / 没响应时，把系统崩溃记录、ANR 记录、TT 日志最后 200 行存进模块的 `crash/`，留 10 份，并发通知 | 随模块删除（电脑菜单会先拷回电脑） |
-| 清理 TT 旧日志 | 每天删一次 TT 自己 30 天以前的运行日志（`logs/tauritavern.log.日期`）和错误记录（`_errors`）；请求记录 TT 自己会清，不碰 | — |
-| 过热提醒 | 生成回复时电池 45°C 以上提醒一次 | — |
-| 浏览器内核记录 | 系统浏览器内核（WebView）版本变化时记一行（TT 靠它显示界面） | — |
+| `backup` | 1 | 自动备份 |
+| `backup_hours` | 6 | 数据有变化时的最短备份间隔（小时） |
+| `backup_private` | 1 | 1 = 私密存储，0 = 共享存储 |
+| `keep_days` / `keep_weeks` / `keep_months` | 7 / 4 / 6 | 分层保留 |
+| `mac_alert_days` | 3 | 超过几天未同步到电脑时提醒，0 = 关闭 |
+| `auto_reopen` | 1 | 生成中被系统结束时自动重开 TT |
+| `notify` | 1 | 异常通知，0 = 仅记录日志 |
+| `cleanup_days` | 30 | 清理 TT 自身多少天前的日志，0 = 不清理 |
+| `temp_alert` | 45 | 生成中电池温度提醒阈值（°C），0 = 关闭 |
 
-## 关于冻结和查杀（实测，OnePlus PLC110 / Android 16 / TT 2.3.0）
+## 手动恢复
 
-- 系统的后台冻结器开着：优先级（oom_adj）≥ 900（「缓存」）的应用会被冻结。电池白名单、待机分组「豁免」都**不**免冻结。
-- TT 2.3.0 起，**生成回复时自己开前台服务**（`AiGenerationForegroundService`，通知「少女祈祷中 / 请勿划掉」），优先级约 200，不会被 Android 冻结；生成完就关。空闲时被冻结是正常省电，不影响回复，点开就解冻。
-- Android 15 起，这类前台服务（dataSync）每 24 小时最多约 6 小时，超了系统会让它停。
-- 按 AOSP 的实现，系统决定冻结谁、lmkd 决定先杀谁，都用系统自己记的优先级，不读 `/proc/<pid>/oom_score_adj`，所以 1.3 不再改它。
-- Android 16 没有「单个应用免冻结」的正当开关，只能整机关冻结器（所有应用都更耗电）或强行解冻（和系统打架），这个模块都不做。
-- ColorOS / OxygenOS 还有自家的后台管控（athena、hans）。另外到「设置 → 电池 → 应用耗电管理 → TauriTavern」打开「允许后台行为」「允许自启动」。
+1. 在最近任务中关闭 TT。
+2. 用有 root 权限的文件管理器解压备份（`.tar.gz`），得到 `default-user` 等目录。
+3. 复制回 `内部存储/Android/data/com.tauritavern.client/data/`，文件属主改为 TT 的 uid。
+4. API 密钥不在备份中，换机或重装后需重新填写。
 
-## 开关
+## 开发与发布
 
-模块目录（`/data/adb/modules/claudemax_tt_keepalive/`）里的 `config.txt`，用有 root 权限的文件管理器（比如 MT 管理器）改，改完不用重启，最多 1 分钟生效：
+目录：
 
-```
-backup=1        # 每天备份（0 关）
-backup_keep=7   # 备份留几份
-auto_reopen=1   # 被系统杀掉时自动重开（0 关）
-notify=1        # 发通知（0 关，只记日志）
-cleanup_days=30 # 清理 TT 多少天以前的日志（0 不清理）
-temp_alert=45   # 生成时电池到多少度提醒（0 不提醒）
-```
+| 路径 | 内容 |
+|---|---|
+| `ksu-tt-keepalive/` | 模块本体：`common.sh` 公共函数，`service.sh` 常驻循环，`ui.sh` 界面与电脑端调用的命令，`restore.sh` 恢复，`action.sh` 执行按钮，`uninstall.sh`，`customize.sh`，`retention.awk` 保留规则，`webroot/index.html` 界面 |
+| `pc/` | 电脑端：`pull-backups.sh`（Mac）、`pull-backups.ps1`（Windows）及安装脚本 |
+| `tests/` | `run.sh` 全部测试；`cases.sh` 模块测试（dash / sh / ksh 各运行一遍）；`pc-cases.zsh` 电脑端测试；`run-on-phone.sh` 在手机的 mksh 和 busybox ash 上运行模块测试 |
 
-旧版本升级上来的 `config.txt` 会自动补上新开关，已有的不动。
+约定：
 
-## 从备份恢复
+- 测试用 PATH 中的假命令替代 `dumpsys`、`am`、`cmd`、`pm`、`logcat`、`getprop`、`df` 等，模块脚本不做任何修改即可测试；样例数据取自真机，位于 `tests/fixtures/`。
+- 脚本只使用 POSIX sh 语法（手机上由 busybox ash 或 mksh 运行）；函数若要避免修改调用方的同名变量，写成子 shell 函数 `f() ( … )`。
+- 用户可见文案：标准化、简洁，不使用口语。
+- 发布：修改 `module.prop` 的 `version` 和 `versionCode` → 写 `CHANGELOG.md` → `sh tests/run.sh` → `ADB=… ANDROID_SERIAL=… zsh tests/run-on-phone.sh` → `zsh build-ksu-module.sh`。
+- 排查问题：界面「诊断 → 导出诊断包」生成 `内部存储/Download/tt-guard-diag-*.tar.gz`，内含模块日志、状态、设置、自检结果和设备信息，不含聊天数据。
 
-**简单的办法**：电脑上酒馆工具的「安卓保活模块」，在「从备份恢复」那一步输入编号。它会提醒你先把 TT 划掉；恢复前模块自动把现在的数据另存一份，想撤销就再恢复那一份。
+## 安全说明
 
-也可以在手机上用有 root 的终端：`su -c 'sh /data/adb/modules/claudemax_tt_keepalive/restore.sh 备份文件名'`。
-
-**手动恢复**：
-
-1. 把 TT 关掉（最近任务里划掉）。
-2. 用有 root 权限的文件管理器（比如 MT 管理器；Android 11 起普通文件管理器进不了 `Android/data`）把备份（`.tar.gz`）解压，得到 `default-user` 文件夹。
-3. 把里面要恢复的东西（比如 `chats`、`characters`）复制回 `内部存储/Android/data/com.tauritavern.client/data/default-user/`，覆盖。
-4. API 密钥不在备份里，换机或重装后要在 TT 里重新填。
-
-## 安装 / 升级
-
-1. Mac 上运行 `zsh build-ksu-module.sh`（先跑单元测试），得到 `dist/claudemax-tt-keepalive-<版本>.zip`。酒馆工具的「安卓保活模块」菜单也是调这个脚本，并把 zip 推到手机的「下载」文件夹。
-2. 手机：KernelSU 管理器 → 模块 → 从本地安装 → 选这个 zip → 重启。旧版本直接覆盖，原值、状态和日志会带过来。
-3. 模块卡片上的「执行」按钮（`action.sh`，只读）显示：白名单、后台运行、待机分组、网络是否被限制、是否在生成回复、各进程是否被冻结、系统记的优先级、今天和最近 7 天的统计、退出原因汇总、最近 3 次退出、备份情况、开关、装模块前的原值、最近的日志。
-
-卸载：KernelSU 管理器里删除模块并重启。`uninstall.sh` 在开机早期运行，那时系统服务还没起来，所以它先读出原值、在后台等开机完成后再还原白名单、后台运行和待机分组。模块只改过这三样。
-
-Magisk：zip 里按 Magisk 文档带了 `META-INF`（安装器）和 `customize.sh`，理论上能用 Magisk 装，但只在 KernelSU 上测过。
-
-## 开发
-
-- `ksu-tt-keepalive/`：模块本体。`common.sh` 是共用函数，`service.sh` 开机后常驻，`action.sh` 是「执行」按钮，`restore.sh` 从备份恢复，`uninstall.sh` 卸载时还原，`customize.sh` 升级时带上旧数据。
-- `sh tests/run.sh`：在 Mac 上用 dash / sh / ksh 各跑一遍单元测试。用 PATH 里的假命令代替 dumpsys / am / cmd / logcat 等，模块脚本不改一行地被测；样例数据在 `tests/fixtures/`，取自真机输出。
-- `ADB=adb路径 ANDROID_SERIAL=序列号 zsh tests/run-on-phone.sh`：同一组测试在手机上用真正的 mksh 和 busybox ash 跑（以 shell 身份，只用假命令，不改手机设置）。
-- 版本号在 `ksu-tt-keepalive/module.prop`（`version` 和 `versionCode` 一起加），改动写进 `CHANGELOG.md`。
-
-## 安全自查（1.5）
-
-- **范围**：只动一个包名 `com.tauritavern.client`，写死在脚本里；没装 TT 时什么都不改。
-- **权限用途**：root 只用来执行上表的 Android 命令、读 cgroup 状态文件和系统日志、打包备份 TT 的数据、以 shell 身份（`su 2000`）发通知、自动重开时 `am start` TT、恢复备份时覆盖 TT 的数据（只在你主动运行 `restore.sh` 时）、删 TT 自己 30 天以前的运行日志和错误记录。不写 `/proc`、不写 cgroup、不解冻。
-- **备份**：只打包、不解析 TT 的数据；排除 `secrets.json`（API 密钥），因为「内部存储」里的文件有存储权限的应用都能读。备份只留在手机上，不上传。
-- **不做的事**：不联网、不下载、不含任何可执行文件或库；没有 `system/` 目录（不覆盖系统文件）；不改 SELinux 策略；不改系统属性（`resetprop`）；不改全局冻结器设置；除了打包备份 TT 自己的数据外不读取任何应用的数据，也不解析聊天内容；不装 LSPosed / Zygisk 钩子。
-- **外部输入**：只读系统命令的输出和 `config.txt` 里的开关；通知文字里的引号会被去掉再拼命令。日志只写模块自己目录里的 `service.log`（时间和发生了什么），留最近 7 天；`prior.txt` 只记四个设置的原值；`state.txt` 记退出记录读到哪、上次备份时间、TT 版本和 uid；`stats.txt` 只有数字。
-- **资源占用**：常驻一个 shell 循环：TT 开着时每 15 秒一次 `pidof`、一次 `dumpsys activity services`（只查 TT），读一两个 cgroup 文件，生成中再查一次网络状态；进程变化时读一次退出记录；TT 没开时每 60 秒一次；每 10 分钟核对一次白名单、后台运行和待机分组（只在不对时才改）；每天备份一次（约 2 秒，最低优先级），7 份约 300 MB。
-- **副作用**：白名单和允许后台运行让 TT 息屏时网络不断，挂在后台时会比原来多耗一点电。
-- **回滚**：删除模块并重启即可。
-- **卸载**：设置还原；备份文件夹不删。
-- **恢复**：只接受本模块备份文件夹里、名字是 `tt-default-user-*.tar.gz` 的文件，里面只能有 `default-user/` 下的东西（没有绝对路径、没有 `..`）；恢复前先另存现在的数据。
-- 打包出的 zip 只有文本文件：`module.prop`、`common.sh`、`service.sh`、`uninstall.sh`、`action.sh`、`customize.sh`、`restore.sh`，以及 Magisk 用的 `META-INF/com/google/android/update-binary`、`updater-script`，安装前可以用任何文本编辑器看一遍。
+- 作用范围：只操作 `com.tauritavern.client`；未安装 TT 时不做任何修改。
+- root 用途：执行上述 Android 命令；读取 cgroup、温度传感器和系统日志；打包、校验、恢复 TT 数据；以 shell 身份（`su 2000`）发送通知；自动重开时 `am start` TT。不写 `/proc`，不写 cgroup，不解冻进程，不修改全局冻结器设置、SELinux 策略或系统属性。
+- 数据：不联网；备份不含 `secrets.json`，默认只有 root 可读；诊断包不含聊天数据。
+- 输入：界面传入的开关名和值只接受白名单和数字；备份文件名只接受 `tt-default-user-*.tar.gz` 格式且不含 `..` 和 `/`；恢复前检查压缩包内只有允许的目录、没有 `..`。
+- 资源：TT 运行时每 15 秒检查一次（空闲冻结时降为 60 秒且不调用 `dumpsys`）；备份约 2 秒，最低优先级。
+- 回滚：删除模块并重启。

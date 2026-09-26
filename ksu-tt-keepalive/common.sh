@@ -56,9 +56,12 @@ prune_log() {
 }
 
 # 开关：config.txt 里 key=value；没写就用默认值 $2
+# 开关：config.txt 里 key=value；没写、写错（不是数字）就用默认值 $2。
+# 容错：Windows 记事本存的 \r、行尾注释、前后空格
 cfg() {
-    v=$(sed -n "s/^$1=\([^ #]*\).*/\1/p" "$CONFIG" 2>/dev/null | head -1)
-    echo "${v:-$2}"
+    [ -f "$CONFIG" ] || { echo "$2"; return; }
+    v=$(tr -d '\r' < "$CONFIG" | sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^ #]*\).*/\1/p" | head -1)
+    case "$v" in ''|*[!0-9]*) echo "$2" ;; *) echo "$v" ;; esac
 }
 
 # 开关的默认值（config.txt 没有的就用这里的）。改完不用重启，最多 1 分钟生效
@@ -117,7 +120,8 @@ config_set() {
 
 # 每日统计：一行「日期 生成次数 生成秒数 冻结 生成中冻结 被系统结束 被强制停止」
 # stat_add 列号 增量（列号 2..7）
-stat_add() {
+stat_add() { with_lock stats _stat_add "$@"; }
+_stat_add() {
     today=$(date +%m-%d)
     cat "$STATS" 2>/dev/null | awk -v d="$today" -v c="$1" -v n="$2" '
         $1 == d { $c += n; hit = 1 }
@@ -129,9 +133,26 @@ stat_get() { cat "$STATS" 2>/dev/null | awk -v d="$(date +%m-%d)" -v c="$1" '$1 
 
 # 状态文件：key=value，每个 key 一行
 state_get() { sed -n "s/^$1=//p" "$STATE" 2>/dev/null | head -1; }
-state_set() {
-    { grep -v "^$1=" "$STATE" 2>/dev/null; echo "$1=$2"; } > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+# 状态文件和统计文件会被好几个进程写（常驻循环、界面、电脑），改之前先拿锁，免得互相覆盖丢掉
+# 在子 shell 里跑（圆括号），不改外面的同名变量（i、r 之类）
+with_lock() (   # with_lock 锁名 命令…：最多等 5 秒；超过 60 秒的锁当作残留
+    l=$MODDIR/.$1.lock; shift; i=0
+    until mkdir "$l" 2>/dev/null; do
+        i=$((i + 1))
+        if [ $i -gt 50 ]; then
+            [ -n "$(find "$l" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rm -rf "${l:?}" && continue
+            break
+        fi
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+    "$@"; r=$?
+    rm -rf "${l:?}"
+    exit $r
+)
+_state_set() {
+    { grep -v "^$1=" "$STATE" 2>/dev/null; echo "$1=$2"; } > "$STATE.tmp.$$" && mv "$STATE.tmp.$$" "$STATE"
 }
+state_set() { with_lock state _state_set "$@"; }
 
 # TT 的 uid。pm 在开机后、第一次解锁前也能查到；/data/data 要解锁后才读得到，只作后备
 app_uid() {
@@ -191,22 +212,22 @@ exit_records() {
 # 把退出原因翻成人话。$1 = 原因，$2 = 子原因
 exit_reason_zh() {
     case "$1" in
-        "LOW MEMORY")               echo "内存不够，被系统回收" ;;
+        "LOW MEMORY")               echo "内存不足，被系统回收" ;;
         "USER REQUESTED")
             case "$2" in
-                "FORCE STOP") echo "被强制停止（最近任务里划掉、设置里强行停止，或电脑上 adb am force-stop）" ;;
-                *)            echo "用户操作停止" ;;
+                "FORCE STOP") echo "强制停止（最近任务划掉、设置中强行停止或 adb）" ;;
+                *)            echo "用户停止" ;;
             esac ;;
-        "USER STOPPED")             echo "用户在任务管理里停止" ;;
-        "SIGNALED")                 echo "被信号杀掉（多半是厂商的后台清理）" ;;
-        "APP CRASH(EXCEPTION)"|"APP CRASH(NATIVE)"|CRASH*) echo "TT 自己崩溃了" ;;
-        "ANR")                      echo "TT 没响应（ANR）被结束" ;;
-        "EXCESSIVE RESOURCE USAGE") echo "占用资源太多被系统结束" ;;
+        "USER STOPPED")             echo "用户在任务管理中停止" ;;
+        "SIGNALED")                 echo "被系统信号结束（通常为厂商后台清理）" ;;
+        "APP CRASH(EXCEPTION)"|"APP CRASH(NATIVE)"|CRASH*) echo "应用崩溃" ;;
+        "ANR")                      echo "应用无响应（ANR）" ;;
+        "EXCESSIVE RESOURCE USAGE") echo "资源占用过高，被系统结束" ;;
         "FREEZER")                  echo "冻结期间被系统结束" ;;
-        "PACKAGE UPDATED")          echo "TT 更新安装" ;;
-        "PACKAGE STATE CHANGE")     echo "TT 被停用或状态变化" ;;
-        "EXIT SELF")                echo "TT 自己退出" ;;
-        "OTHER KILLS BY SYSTEM")    echo "系统的其他清理" ;;
+        "PACKAGE UPDATED")          echo "应用更新" ;;
+        "PACKAGE STATE CHANGE")     echo "应用被停用或状态变化" ;;
+        "EXIT SELF")                echo "应用自行退出" ;;
+        "OTHER KILLS BY SYSTEM")    echo "系统清理" ;;
         *)                          echo "其他（$1）" ;;
     esac
 }
@@ -236,6 +257,7 @@ tt_version() { dumpsys package "$PKG" 2>/dev/null | sed -n 's/^ *versionName=//p
 
 # 系统结束 TT 的原因（不是用户、不是 TT 自己）：这类才值得自动重开
 system_kill() {
+    case "${2:-}" in *TASK*|*USER*) return 1 ;; esac   # 最近任务里划掉之类，是用户的意思
     case "$1" in "LOW MEMORY"|SIGNALED|"OTHER KILLS BY SYSTEM"|FREEZER|"EXCESSIVE RESOURCE USAGE") return 0 ;; esac
     return 1
 }
@@ -264,12 +286,28 @@ other_bdir() { if [ "$(cfg backup_private 1)" = 0 ]; then echo "$PRIVATE_BK"; el
 list_backups() { ls "$(bdir)" 2>/dev/null | grep '^tt-default-user-.*\.tar\.gz$' | sort -r; }
 
 # 私密位置只有 root 能读；共享位置给 media_rw（1023），文件管理器才能看到、删掉
+# 同一分区里 mv 会带着原来的 SELinux 标签，搬完要改成目标位置该有的标签，文件管理器才读得到
 fix_bk_perms() {
     if [ "$1" = "$PRIVATE_BK" ]; then
-        chown -R 0:0 "$1"; chmod 700 "$1"; chmod 600 "$1"/tt-default-user-* 
+        chown -R 0:0 "$1"; chmod 700 "$1"; chmod 600 "$1"/tt-default-user-*
+        command -v chcon >/dev/null && chcon -R u:object_r:adb_data_file:s0 "$1"
     else
         chown -R 1023:1023 "$1"; chmod 775 "$1"; chmod 664 "$1"/tt-default-user-*
+        command -v chcon >/dev/null && chcon -R u:object_r:media_rw_data_file:s0 "$1"
     fi 2>/dev/null
+}
+
+# 目录所在分区的剩余空间（KB）
+free_kb() { df -k "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
+
+# 空间够不够再做一份备份：留出「上一份的两倍 + 500 MB」，免得挤得 TT 自己存不了聊天
+space_ok() {
+    d=$(bdir); mkdir -p "$d" 2>/dev/null
+    newest=$(ls "$d" 2>/dev/null | grep '^tt-default-user-.*\.tar\.gz$' | sort -r | head -n 1)
+    last=$([ -n "$newest" ] && du -k "$d/$newest" 2>/dev/null | cut -f1)
+    need=$(( ${last:-60000} * 2 + 512000 ))
+    f=$(free_kb "$d")
+    [ -z "$f" ] || [ "$f" -ge "$need" ]
 }
 
 # 换了位置（backup_private 改了）就把已有的备份搬过去。输出搬了几个文件
@@ -291,6 +329,7 @@ sha_line() {
 # 上次备份以后 TT 的数据有没有变（有变化才值得再备份）
 data_changed() {
     [ -f "$MODDIR/backup.marker" ] || return 0
+    [ -n "$(list_backups | grep -v prerestore | head -n 1)" ] || return 0   # 备份被删光了：当作有变化
     for mem in $BACKUP_MEMBERS; do
         [ -e "$TT_DATA/$mem" ] || continue
         find "$TT_DATA/$mem" -type f -newer "$MODDIR/backup.marker" 2>/dev/null \
@@ -308,12 +347,12 @@ backup_now() {
     d=$(bdir); mkdir -p "$d" || return 1
     lock=$MODDIR/.backup.lock
     if ! mkdir "$lock" 2>/dev/null; then
-        # 超过 10 分钟的锁当作是上次断电 / 被杀留下的
-        [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ] || return 1
+        # 超过 30 分钟的锁当作是上次断电 / 被杀留下的
+        [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] || return 1
         rm -rf "${lock:?}"; mkdir "$lock" || return 1
     fi
     touch "$MODDIR/backup.marker.new"   # 备份开始前的时间点：备份途中改的文件下次还会算「有变化」
-    name=tt-default-user-$(date +%Y%m%d-%H%M%S).tar.gz
+    name=tt-default-user-$(date +%Y%m%d-%H%M%S)${1:+-$1}.tar.gz   # $1=prerestore：恢复前自动存的那份
     part=$d/.$name.part
     members=""
     for m in $BACKUP_MEMBERS; do [ -e "$TT_DATA/$m" ] && members="$members $m"; done
@@ -322,17 +361,22 @@ backup_now() {
         --exclude='*/secrets.json' --exclude=default-user/secrets.json --exclude=default-user/backups \
         --exclude=default-user/thumbnails --exclude=default-user/content.log --exclude=default-user/.staging \
         $members 2>/dev/null \
-        && tar -tzf "$part" 2>/dev/null | grep -q '^default-user/' \
+        && tar -tzf "$part" > "$part.list" 2>/dev/null && grep -q '^default-user/' "$part.list" \
+        && ! grep -q 'secrets\.json$' "$part.list" \
         && mv "$part" "$d/$name"; then
         sha_line "$d" "$name" > "$d/$name.sha256" && good=1
     fi
     if [ $good = 1 ]; then
-        mv "$MODDIR/backup.marker.new" "$MODDIR/backup.marker"
+        [ -n "${1:-}" ] || mv "$MODDIR/backup.marker.new" "$MODDIR/backup.marker"
+        rm -f "$MODDIR/backup.marker.new"
         fix_bk_perms "$d"
-        echo "$d/$name"
     else
         rm -f "$part" "$d/$name" "$d/$name.sha256" "$MODDIR/backup.marker.new"
     fi
+    rm -f "$part.list"
+    # 备份途中改了备份位置：搬到新位置，免得留在界面看不到的地方
+    [ $good = 1 ] && [ "$d" != "$(bdir)" ] && migrate_backups >/dev/null
+    [ $good = 1 ] && echo "$(bdir)/$name"
     rm -rf "${lock:?}"
     [ $good = 1 ]
 }
@@ -344,6 +388,14 @@ apply_retention() {
         -v weeks="$(cfg keep_weeks 4)" -v months="$(cfg keep_months 6)" -f "$RETENTION" |
     while read -r act tier n; do
         [ "$act" = drop ] || continue
+        rm -f "$d/$n" "$d/$n.sha256" && echo "$n"
+    done
+}
+
+# 恢复前自动存的那几份（-prerestore）不走分层保留，单独只留最新 3 份
+prune_prerestore() {
+    d=$(bdir)
+    ls "$d" 2>/dev/null | grep '^tt-default-user-.*-prerestore\.tar\.gz$' | sort -r | tail -n +4 | while IFS= read -r n; do
         rm -f "$d/$n" "$d/$n.sha256" && echo "$n"
     done
 }
@@ -368,6 +420,23 @@ battery_temp() {
     case "$t" in ''|*[!0-9-]*) return ;; esac
     echo $((t / 10))
 }
+
+# 某个温度传感器（/sys/class/thermal 里 type 等于 $1 的第一个）的整数 °C；读不到或读数不合理（没接的传感器
+# 常报 -274 / 125 之类）就什么都不输出。$2 可以给第二个候选名（不同机型叫法不同）
+THERMAL_ROOT=${THERMAL_ROOT:-/sys/class/thermal}
+thermal_temp() {
+    for want in "$@"; do
+        for z in "$THERMAL_ROOT"/thermal_zone*; do
+            [ "$(cat "$z/type" 2>/dev/null)" = "$want" ] || continue
+            t=$(cat "$z/temp" 2>/dev/null)
+            case "$t" in ''|*[!0-9-]*) continue ;; esac
+            [ "$t" -gt 1000 ] 2>/dev/null && t=$((t / 1000))   # 大多数是毫摄氏度
+            [ "$t" -ge -20 ] && [ "$t" -le 110 ] && { echo "$t"; return; }
+        done
+    done
+}
+soc_temp() { thermal_temp soc_max cpu-big-core7-0 cpu0-thermal tsens_tz_sensor0; }
+board_temp() { thermal_temp board_temp skin-therm shell_front quiet-therm; }
 
 # 是不是崩溃 / 没响应（这类要存证据）
 crash_reason() {

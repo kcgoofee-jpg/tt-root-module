@@ -20,7 +20,8 @@ export REAL_DATE
 BIN=${TEST_BIN:-$T/bin}; mkdir -p "$BIN"
 mk() { printf '#!%s\n%s\n' "$SH" "$2" > "$BIN/$1.new"
        if cmp -s "$BIN/$1.new" "$BIN/$1"; then rm -f "$BIN/$1.new"; else mv "$BIN/$1.new" "$BIN/$1"; chmod +x "$BIN/$1"; fi; }
-mk dumpsys 'case "$1 ${2:-}" in
+mk dumpsys '[ -n "${DS_LOG:-}" ] && echo "$*" >> "$DS_LOG"
+case "$1 ${2:-}" in
   "deviceidle whitelist")
     case "${3:-}" in +*|-*) echo "dumpsys deviceidle whitelist $3" >> "$CALLS" ;;
       *) [ "$FAKE_WL" = yes ] && echo "user,com.tauritavern.client,10447"; echo "system,com.android.shell,2000" ;; esac ;;
@@ -46,6 +47,8 @@ mk su 'echo "su $*" >> "$CALLS"; [ "$1" = 2000 ] && [ "$2" = -c ] && eval "$3"'
 mk getprop 'case "$1" in sys.user.0.ce_available) echo "$FAKE_CE" ;; *) echo 1 ;; esac'
 mk stat 'echo 10447'
 mk sleep ':'
+# df：设了 FAKE_FREE（KB）就假装只剩这么多，否则用真的
+mk df 'if [ -n "${FAKE_FREE:-}" ]; then echo "Filesystem 1K-blocks Used Available Use% Mounted"; echo "/dev/x 100000000 1 $FAKE_FREE 1% /"; else exec /bin/df "$@"; fi'
 # date：永远是 FAKE_NOW 那一刻；支持 date -d @秒数（Mac 的 date 用 -r，手机上的用 -d）
 mk date '[ "${1:-}" = +%s ] && { echo "$FAKE_NOW"; exit; }
 t=$FAKE_NOW; [ "${1:-}" = -d ] && { t=${2#@}; shift 2; }
@@ -75,9 +78,9 @@ newmod 1; ( load
     check "没有 description 时为空" '[ "$(echo "$r" | sed -n 2p)" = "2026-09-26 12:17:18.751|26440|LOW MEMORY|UNKNOWN|400|" ]'
     check "没有 subreason 时为空" '[ "$(echo "$r" | sed -n 3p | cut -d"|" -f3,4)" = "SIGNALED|" ]'
     l=$(exit_line "$(echo "$r" | head -1)")
-    check "强制停止翻成人话" 'case "$l" in "TT（26636）12:29:36.672 退出：被强制停止"*"FORCE STOP"*) true ;; *) false ;; esac'
-    check "内存不够" 'case "$(exit_line "$(echo "$r" | sed -n 2p)")" in *"内存不够"*) true ;; *) false ;; esac'
-    check "被信号杀" 'case "$(exit_line "$(echo "$r" | sed -n 3p)")" in *"厂商的后台清理"*"oplus athena kill"*) true ;; *) false ;; esac'
+    check "强制停止翻成人话" 'case "$l" in "TT（26636）12:29:36.672 退出：强制停止"*"FORCE STOP"*) true ;; *) false ;; esac'
+    check "内存不足" 'case "$(exit_line "$(echo "$r" | sed -n 2p)")" in *"内存不足"*) true ;; *) false ;; esac'
+    check "被信号杀" 'case "$(exit_line "$(echo "$r" | sed -n 3p)")" in *"厂商后台清理"*"oplus athena kill"*) true ;; *) false ;; esac'
     state_set last_exit "2026-09-26 12:14:07.288"
     n=$(new_exits)
     check "new_exits 只要更新的、旧的在前" '[ "$(echo "$n" | cut -d"|" -f2 | tr "\n" " ")" = "26440 26636 " ]'
@@ -130,8 +133,8 @@ newmod 4; ( load
     FAKE_EXIT=$T/none; FAKE_PIDS=26636 FAKE_GEN=1 FAKE_NOW=1000; tick
     check "生成中没通知" '! calls | grep -q notification'
     FAKE_EXIT=$FIX/exit-info.txt FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=1015; tick
-    check "日志记退出原因" 'grep -q "TT（26636）12:29:36.672 退出：被强制停止" "$LOG"'
-    check "发了通知" 'calls | grep -q "notification post -S bigtext -t TT 生成回复到一半进程没了 claudemax_tt_keepalive 原因：被强制停止"'
+    check "日志记退出原因" 'grep -q "TT（26636）12:29:36.672 退出：强制停止" "$LOG"'
+    check "发了通知" 'calls | grep -q "notification post -S bigtext -t TauriTavern 在生成中退出 claudemax_tt_keepalive 原因：强制停止"'
     check "以 shell 身份发" 'calls | grep -q "^su 2000 -c"'
     check "last_exit 前进" '[ "$(state_get last_exit)" = "2026-09-26 12:29:36.672" ]'
     : > "$CALLS"; FAKE_NOW=1075; tick
@@ -155,7 +158,7 @@ newmod 6; ( load
     state_set last_exit "2026-09-26 12:17:18.751"
     FAKE_EXIT=$T/none FAKE_PIDS=26636 FAKE_NOW=1000; tick
     FAKE_EXIT=$FIX/exit-info.txt FAKE_PIDS="" FAKE_NOW=1015; tick
-    check "记了" 'grep -q "退出：被强制停止" "$LOG"'
+    check "记了" 'grep -q "退出：强制停止" "$LOG"'
     check "没通知" '! calls | grep -q notification'
     )
 
@@ -169,15 +172,24 @@ newmod 7; ( load
     check "空闲冻结不通知" '! calls | grep -q notification'
     echo "frozen 0" > "$ev"; FAKE_NOW=1045; tick
     check "解冻记时长" 'grep -q "TT（700）解冻，冻了约 30 秒" "$LOG"'
-    FAKE_GEN=1; echo "frozen 1" > "$ev"; FAKE_NOW=1060; tick
+    FAKE_GEN=1; FAKE_NOW=1052; tick              # 先看到「在生成」
+    echo "frozen 1" > "$ev"; FAKE_NOW=1060; tick # 再被冻结
     check "生成中冻结标出来" 'grep -q "冻结了（正在生成回复）" "$LOG"'
     check "生成中冻结通知" '[ "$(calls | grep -c "^cmd notification")" = 1 ]'
     echo "frozen 0" > "$ev"; FAKE_NOW=1075; tick
     echo "frozen 1" > "$ev"; FAKE_NOW=1090; tick
     check "同一次生成不重复通知" '[ "$(calls | grep -c "^cmd notification")" = 1 ]'
     FAKE_GEN=0; echo "frozen 0" > "$ev"; FAKE_NOW=1105; tick
-    FAKE_GEN=1; echo "frozen 1" > "$ev"; FAKE_NOW=1120; tick
+    FAKE_GEN=1; FAKE_NOW=1112; tick
+    echo "frozen 1" > "$ev"; FAKE_NOW=1120; tick
     check "下一次生成再通知" '[ "$(calls | grep -c "^cmd notification")" = 2 ]'
+    FAKE_GEN=0; FAKE_NOW=1135; tick; FAKE_NOW=1150; tick
+    DS_LOG=$T/ds7; export DS_LOG; : > "$DS_LOG"
+    FAKE_NOW=1165; tick
+    check "省电：空闲冻结时不去问系统在不在生成" '! grep -q "^activity services" "$DS_LOG"'
+    echo "frozen 0" > "$ev"; FAKE_NOW=1180; tick
+    check "解冻后照常检查" 'grep -q "^activity services" "$DS_LOG"'
+    unset DS_LOG
     )
 
 echo "[1.4] 开关、统计、日志按天清理"
@@ -220,15 +232,15 @@ newmod 21; ( load
     stat_add 3 17950
     FAKE_GEN=1 FAKE_NOW=$((DAY0 + 100)); tick
     FAKE_GEN=0 FAKE_NOW=$((DAY0 + 130)); tick
-    check "到 5 小时提醒" 'calls | grep -q "^cmd notification.*今天生成已累计 5 小时"'
+    check "到 5 小时提醒" 'calls | grep -q "^cmd notification.*今日生成时长已达 5 小时"'
     FAKE_GEN=1 FAKE_NOW=$((DAY0 + 200)); tick
     FAKE_GEN=0 FAKE_NOW=$((DAY0 + 230)); tick
-    check "一天只提醒一次" '[ "$(calls | grep -c "^cmd notification.*今天生成已累计")" = 1 ]'
+    check "一天只提醒一次" '[ "$(calls | grep -c "^cmd notification.*今日生成时长已达")" = 1 ]'
     : > "$CALLS"
     FAKE_NET=APP_BACKGROUND FAKE_GEN=1 FAKE_NOW=$((DAY0 + 300)); tick
     FAKE_NOW=$((DAY0 + 315)); tick
     check "生成中网络被限制记日志" 'grep -q "网络被限制（APP_BACKGROUND）" "$LOG"'
-    check "网络提醒一次" '[ "$(calls | grep -c "^cmd notification.*网络被系统限制")" = 1 ]'
+    check "网络提醒一次" '[ "$(calls | grep -c "^cmd notification.*在生成中网络受限")" = 1 ]'
     FAKE_GEN=0 FAKE_NOW=$((DAY0 + 330)); tick
     : > "$CALLS"; FAKE_NET=APP_BACKGROUND
     FAKE_NOW=$((DAY0 + 345)); tick
@@ -243,7 +255,7 @@ newmod 22; ( load
     FAKE_EXIT=$FIX/exit-info.txt FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
     check "重开 TT" 'calls | grep -q "^am start -n com.tauritavern.client/.MainActivity"'
     check "日志：已自动重新打开" 'grep -q "已自动重新打开 TT" "$LOG"'
-    check "通知里说了" 'calls | grep -q "^cmd notification.*内存不够.*已自动重新打开"'
+    check "通知里说了" 'calls | grep -q "^cmd notification.*在生成中退出.*内存不足.*已自动重新打开"'
     check "记下谁动的手" 'grep -q "  系统日志：.*athena : kill pid 26440" "$LOG"'
     check "被系统结束 +1，强制停止 +1" '[ "$(stat_get 6)" = 1 ] && [ "$(stat_get 7)" = 1 ]'
     check "生成也算一次" '[ "$(stat_get 2)" = 1 ]'
@@ -253,7 +265,7 @@ newmod 23; ( load
     FAKE_EXIT=$T/none FAKE_PIDS=26636 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
     FAKE_EXIT=$FIX/exit-info.txt FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
     check "强制停止不重开" '! calls | grep -q "^am start"'
-    check "但通知" 'calls | grep -q "^cmd notification.*被强制停止"'
+    check "但通知" 'calls | grep -q "^cmd notification.*在生成中退出.*强制停止"'
     )
 newmod 24; ( load
     FAKE_WL=yes FAKE_RAIB=allow; echo auto_reopen=0 > "$CONFIG"; state_set last_exit "2026-09-26 12:14:07.288"
@@ -338,7 +350,7 @@ newmod 28; ( load
     FAKE_NOW=$((DAY0 + 600)); tick
     check "1 小时内不重试" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 1 ]'
     FAKE_NOW=$((DAY0 + 3700)); tick; FAKE_NOW=$((DAY0 + 7400)); tick
-    check "连续失败 3 次发通知" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 3 ] && calls | grep -q "^cmd notification.*TT 备份连续失败 3 次"'
+    check "连续失败 3 次发通知" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 3 ] && calls | grep -q "^cmd notification.*备份连续失败 3 次"'
     mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"; FAKE_NOW=$((DAY0 + 11100)); tick
     check "成功后失败次数清零" '[ "$(state_get backup_fails)" = 0 ]'
     )
@@ -384,13 +396,13 @@ newmod 35; ( load
     FAKE_PIDS="" FAKE_NOW=$((DAY0 + 86400)); tick
     check "1 天：不提醒" '! calls | grep -q "^cmd notification"'
     FAKE_NOW=$((DAY0 + 3 * 86400 + 60)); tick
-    check "3 天没拷到电脑提醒" 'calls | grep -q "^cmd notification.*已经 3 天没把备份拷到电脑"'
-    check "3 天没备份成功提醒" 'calls | grep -q "^cmd notification.*TT 已经 3 天没备份成功了"'
+    check "3 天没拷到电脑提醒" 'calls | grep -q "^cmd notification.*3 天未同步到电脑"'
+    check "3 天没备份成功提醒" 'calls | grep -q "^cmd notification.*3 天未备份"'
     FAKE_NOW=$((DAY0 + 3 * 86400 + 120)); tick
     check "同一天不重复提醒" '[ "$(calls | grep -c "^cmd notification")" = 2 ]'
     : > "$CALLS"; sh "$TT_MODDIR/ui.sh" mark-pulled >/dev/null; state_set last_backup_check $((DAY0 + 4 * 86400))
     FAKE_NOW=$((DAY0 + 4 * 86400 + 60)); tick
-    check "电脑拷走后不再提醒" '! calls | grep -q "拷到电脑"'
+    check "电脑拷走后不再提醒" '! calls | grep -q "同步到电脑"'
     )
 
 echo "[1.5] 崩溃记录"
@@ -409,13 +421,13 @@ X
     export FAKE_CRASHLOG=$T/crashlog
     FAKE_EXIT=$T/crash-exit.txt FAKE_PIDS="" FAKE_NOW=$DAY0; tick
     d=$(ls -d "$CRASH_DIR"/*/ 2>/dev/null | head -1)
-    check "存了崩溃记录" '[ -n "$d" ] && grep -q "TT 自己崩溃了" "$d/退出原因.txt"'
+    check "存了崩溃记录" '[ -n "$d" ] && grep -q "应用崩溃" "$d/退出原因.txt"'
     check "系统崩溃记录只要这个进程" 'grep -q "FATAL EXCEPTION" "$d/系统崩溃记录.txt" && ! grep -q Other "$d/系统崩溃记录.txt"'
     check "ANR 记录找对文件" 'grep -q "pid 4242" "$d/ANR记录.txt"'
     check "TT 日志取最新一天的最后 200 行" '[ "$(wc -l < "$d/TT日志最后200行.txt" | tr -d " ")" = 200 ] && [ "$(tail -n 1 "$d/TT日志最后200行.txt")" = 300 ]'
     check "日志记了（目录名对）" 'grep -q "已保存崩溃记录：crash/19700102-000000-4242$" "$LOG"'
     check "exit_line 不改外面的变量" 'd=keep; pid=keep; exit_line "2026|1|ANR||100|x" >/dev/null; [ "$d$pid" = keepkeep ]'
-    check "发了通知" 'calls | grep -q "^cmd notification.*TT 自己崩溃了"'
+    check "发了通知" 'calls | grep -q "^cmd notification.*TauriTavern 异常退出.*应用崩溃"'
     i=0; while [ $i -lt 12 ]; do mkdir -p "$CRASH_DIR/19700101-0000$(printf %02d $i)-1"; i=$((i + 1)); done
     save_crash "2026|4242|ANR||100|" >/dev/null
     check "崩溃记录只留 10 份" '[ "$(ls -d "$CRASH_DIR"/*/ | wc -l | tr -d " ")" = 10 ]'
@@ -441,13 +453,13 @@ newmod 31; ( load
     check "cleanup_days=0 不清" '[ -f "$TT_LOGS/tauritavern.log.old2" ]'
     : > "$CONFIG"
     echo 440 > "$BATTERY_TEMP"; FAKE_PIDS=5 FAKE_GEN=1 FAKE_NOW=$((DAY0 + 86500)); tick
-    check "44°C 不提醒" '! calls | grep -q "手机有点烫"'
+    check "44°C 不提醒" '! calls | grep -q "电池温度"'
     echo 463 > "$BATTERY_TEMP"; FAKE_NOW=$((DAY0 + 86515)); tick; FAKE_NOW=$((DAY0 + 86530)); tick
-    check "46°C 提醒一次" '[ "$(calls | grep -c "^cmd notification.*手机有点烫：电池 46°C")" = 1 ]'
+    check "46°C 提醒一次" '[ "$(calls | grep -c "^cmd notification.*电池温度 46°C")" = 1 ]'
     FAKE_GEN=0 FAKE_NOW=$((DAY0 + 86545)); tick
-    check "不在生成时不提醒" '[ "$(calls | grep -c "^cmd notification.*手机有点烫")" = 1 ]'
+    check "不在生成时不提醒" '[ "$(calls | grep -c "^cmd notification.*电池温度")" = 1 ]'
     echo temp_alert=0 > "$CONFIG"; FAKE_GEN=1 FAKE_NOW=$((DAY0 + 86560)); tick
-    check "temp_alert=0 不提醒" '[ "$(calls | grep -c "^cmd notification.*手机有点烫")" = 1 ]'
+    check "temp_alert=0 不提醒" '[ "$(calls | grep -c "^cmd notification.*电池温度")" = 1 ]'
     echo abc > "$BATTERY_TEMP"; check "温度读不到时为空" '[ -z "$(battery_temp)" ]'
     ensure
     check "浏览器内核第一次只记下" '[ "$(state_get webview)" = "com.google.android.webview, 153.0.8010.36" ] && ! grep -q WebView "$LOG"'
@@ -486,8 +498,8 @@ check "备份里的文件恢复了" 'grep -qx "旧聊天" "$U/chats/A/1.jsonl"'
 check "备份里没有的留着" 'grep -qx "之后新建" "$U/chats/A/2.jsonl"'
 check "扩展也恢复了" 'grep -qx "旧扩展" "$TT_DATA/extensions/e/i.js"'
 check "API 密钥不动" 'grep -qx "sk-KEY" "$U/secrets.json"'
-check "恢复前先备份了现在的" '[ -f "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" ] && tar -xzOf "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" default-user/chats/A/1.jsonl | grep -qx "新聊天"'
-check "恢复前的备份不含密钥" '! tar -tzf "$BACKUP_DIR/tt-default-user-19700101-012320.tar.gz" | grep -q secrets'
+check "恢复前先备份了现在的（单独命名）" '[ -f "$BACKUP_DIR/tt-default-user-19700101-012320-prerestore.tar.gz" ] && tar -xzOf "$BACKUP_DIR/tt-default-user-19700101-012320-prerestore.tar.gz" default-user/chats/A/1.jsonl | grep -qx "新聊天"'
+check "恢复前的备份不含密钥" '! tar -tzf "$BACKUP_DIR/tt-default-user-19700101-012320-prerestore.tar.gz" | grep -q secrets'
 check "属主改回 TT" 'calls | grep -q "^chown -R 10447:10447 $U"'
 check "临时目录删了" '[ ! -e "$TT_DATA/.cc-restore" ]'
 check "记日志" 'grep -q "从备份恢复了 TT 数据：tt-default-user-19700101-000000.tar.gz" "$TT_MODDIR/service.log"'
@@ -495,7 +507,7 @@ check "记日志" 'grep -q "从备份恢复了 TT 数据：tt-default-user-19700
 echo "[1.6] 界面用的 ui.sh"
 newmod 36
 mkdir -p "$TT_DATA/default-user" "$BACKUP_DIR"; echo x > "$TT_DATA/default-user/a"
-printf '01-01 10:00:00 TT（1）12:00:00.000 退出：内存不够，被系统回收［LOW MEMORY］\n01-01 10:00:01 带"引号"和\\反斜杠\t制表\n' > "$TT_MODDIR/service.log"
+printf '01-01 10:00:00 TT（1）12:00:00.000 退出：内存不足，被系统回收［LOW MEMORY］\n01-01 10:00:01 带"引号"和\\反斜杠\t制表\n' > "$TT_MODDIR/service.log"
 echo "01-01 2 330 3 1 2 1" > "$TT_MODDIR/stats.txt"
 echo 361 > "$BATTERY_TEMP"
 out=$(FAKE_WL=yes FAKE_RAIB=allow FAKE_PIDS=26636 FAKE_GEN=1 sh "$TT_MODDIR/ui.sh" status)
@@ -526,6 +538,129 @@ check "界面不引用任何外部网址" '! grep -qE "(src|href)=\"https?://" "
 check "界面只调本模块的 ui.sh" '[ "$(grep -o "ksu\.exec([^)]*" "$H" | wc -l | tr -d " ")" = 1 ] && grep -q "sh \${MOD}/ui.sh" "$H"'
 check "恢复时只放行安全的文件名字符" 'grep -q "name.replace(/\[^A-Za-z0-9._-\]/g" "$H"'
 
+echo "[防呆] 设置文件写错"
+newmod 40; ( load
+    printf 'backup=0\r\nnotify = 0 \r\n' > "$CONFIG"
+    check "Windows 记事本的 CRLF" '[ "$(cfg backup 1)" = 0 ]'
+    check "等号两边有空格" '[ "$(cfg notify 1)" = 0 ]'
+    printf 'backup=yes\nbackup_hours=六\nkeep_days=-3\n' > "$CONFIG"
+    check "不是数字：用默认值" '[ "$(cfg backup 1)" = 1 ] && [ "$(cfg backup_hours 6)" = 6 ] && [ "$(cfg keep_days 7)" = 7 ]'
+    out=$(sh "$TT_MODDIR/ui.sh" selftest)
+    check "自检报出无效的值" 'printf "%s" "$out" | grep -q "\"name\":\"设置文件\",\"ok\":false"'
+    rm -f "$CONFIG"
+    check "设置文件被删：全用默认值" '[ "$(cfg backup 1)$(cfg backup_private 1)" = 11 ]'
+    config_fill
+    check "设置文件被删：重新生成" 'grep -qx backup=1 "$CONFIG"'
+    echo backup_hours=0 > "$CONFIG"
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"
+    FAKE_PIDS="" FAKE_NOW=$DAY0; tick; FAKE_NOW=$((DAY0 + 1800)); tick
+    check "备份间隔写成 0：按 6 小时，不会狂备份" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
+    )
+
+echo "[防呆] 备份"
+newmod 41; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"
+    FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    check "先有一份" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
+    rm -rf "$BACKUP_DIR"
+    FAKE_NOW=$((DAY0 + 7 * 3600)); tick
+    check "手动删光备份目录：数据没变也重新备份" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
+    export FAKE_FREE=1000; FAKE_NOW=$((DAY0 + 14 * 3600)); touch -t 200001010000 "$TT_MODDIR/backup.marker"; tick
+    check "存储满：不备份" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
+    check "存储满：记日志、发通知" 'grep -q "存储空间不足，暂停自动备份" "$LOG" && calls | grep -q "^cmd notification.*存储空间不足"'
+    FAKE_NOW=$((DAY0 + 14 * 3600 + 60)); tick; unset FAKE_FREE
+    check "存储满：同一天只提醒一次" '[ "$(calls | grep -c "^cmd notification.*存储空间不足")" = 1 ]'
+    r=$(FAKE_FREE=1000 sh "$TT_MODDIR/ui.sh" backup)
+    check "存储满：手动备份也拒绝" 'echo "$r" | grep -q "存储空间不足"'
+    r=$(FAKE_PIDS=5 FAKE_GEN=1 sh "$TT_MODDIR/ui.sh" backup)
+    check "生成中点「立即备份」：拒绝" 'echo "$r" | grep -q "正在生成回复"'
+    mkdir "$TT_MODDIR/.backup.lock"
+    r=$(sh "$TT_MODDIR/ui.sh" backup)
+    check "连点两次备份：第二次不跑" 'echo "$r" | grep -q "\"ok\":false"'
+    r=$(sh "$TT_MODDIR/ui.sh" set backup_private 0)
+    check "备份进行中不能切换存储位置" 'echo "$r" | grep -q "正在备份" && [ "$(cfg backup_private 1)" = 1 ]'
+    rmdir "$TT_MODDIR/.backup.lock"
+    )
+
+echo "[防呆] 保留规则"
+newmod 42; ( load
+    mkdir -p "$BACKUP_DIR"
+    for n in 20260926-120000 20250926-120000 20240926-120000; do echo x > "$BACKUP_DIR/tt-default-user-$n.tar.gz"; done
+    FAKE_NOW=1893456000   # 2030-01-01：系统时间跳到了几年后
+    check "系统时间跳到未来：一份都不删" '[ -z "$(apply_retention)" ] && [ "$(bk | wc -l | tr -d " ")" = 3 ]'
+    FAKE_NOW=1790380800
+    printf 'keep_days=0\nkeep_weeks=0\nkeep_months=0\n' > "$CONFIG"; apply_retention >/dev/null
+    check "保留全设成 0：最新一份还在" '[ -f "$BACKUP_DIR/tt-default-user-20260926-120000.tar.gz" ]'
+    : > "$CONFIG"
+    for i in 1 2 3 4 5; do echo x > "$BACKUP_DIR/tt-default-user-2026092${i}-100000-prerestore.tar.gz"; done
+    check "恢复前的那几份不走分层保留" '[ "$(backup_tiers | grep -c "^pre ")" = 5 ] && [ -z "$(apply_retention | grep prerestore)" ]'
+    prune_prerestore >/dev/null
+    check "恢复前的只留最新 3 份" '[ "$(ls "$BACKUP_DIR" | grep -c prerestore)" = 3 ] && [ -f "$BACKUP_DIR/tt-default-user-20260925-100000-prerestore.tar.gz" ] && [ ! -f "$BACKUP_DIR/tt-default-user-20260921-100000-prerestore.tar.gz" ]'
+    )
+
+echo "[防呆] 恢复"
+newmod 43
+mkdir -p "$TT_DATA/default-user" "$BACKUP_DIR"; echo x > "$TT_DATA/default-user/a"
+( cd "$TT_DATA" && tar -czf "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz" default-user )
+( cd "$BACKUP_DIR" && shasum -a 256 tt-default-user-19700101-000000.tar.gz > tt-default-user-19700101-000000.tar.gz.sha256 )
+mkdir "$TT_MODDIR/.restore.lock"
+sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
+check "界面和电脑同时点恢复：第二个不跑" '[ $r = 7 ] && grep -q 另一个恢复正在进行 "$T/r.out"'
+rmdir "$TT_MODDIR/.restore.lock"
+FAKE_FREE=1000 sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
+check "空间不够：不恢复" '[ $r = 8 ]'
+printf 'garbage' >> "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz"
+sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
+check "备份文件坏了（校验不对）：不恢复" '[ $r = 9 ] && [ ! -e "$TT_DATA/.cc-restore" ]'
+sh "$TT_MODDIR/restore.sh" "tt-default-user-1..tar.gz" > /dev/null; r=$?
+check "文件名里有 ..：不恢复" '[ $r = 2 ]'
+check "恢复结束后锁都释放" '[ ! -d "$TT_MODDIR/.restore.lock" ]'
+
+echo "[防呆] 划掉 TT 不算被系统杀"
+newmod 44; ( load
+    check "子原因带 TASK：不算系统杀" '! system_kill "OTHER KILLS BY SYSTEM" "REMOVE TASK"'
+    check "子原因带 USER：不算系统杀" '! system_kill "SIGNALED" "USER"'
+    check "内存不够：算" 'system_kill "LOW MEMORY" "UNKNOWN"'
+    mkdir "$TT_MODDIR/.restore.lock"
+    FAKE_WL=yes FAKE_RAIB=allow; state_set last_exit "2026-09-26 12:14:07.288"
+    FAKE_EXIT=$T/none FAKE_PIDS=26440 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
+    FAKE_EXIT=$FIX/exit-info.txt FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
+    check "正在恢复时不自动重开 TT" '! calls | grep -q "^am start"'
+    rmdir "$TT_MODDIR/.restore.lock"
+    )
+
+echo "[防呆] 卸载时把私密备份搬出来"
+newmod 45
+mkdir -p "$PRIVATE_BK"; echo x > "$PRIVATE_BK/tt-default-user-19700101-000000.tar.gz"; echo h > "$PRIVATE_BK/tt-default-user-19700101-000000.tar.gz.sha256"
+printf 'whitelist=yes\nRUN_IN_BACKGROUND=allow\nRUN_ANY_IN_BACKGROUND=allow\n' > "$TT_MODDIR/prior.txt"
+UNINSTALL_DELAY=0 sh "$TT_MODDIR/uninstall.sh"; i=0
+while [ $i -lt 50 ] && [ ! -f "$SHARED_BK/tt-default-user-19700101-000000.tar.gz.sha256" ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done
+"$REAL_SLEEP" 0.3
+check "备份搬到共享位置（连校验文件）" '[ -f "$SHARED_BK/tt-default-user-19700101-000000.tar.gz" ] && [ -f "$SHARED_BK/tt-default-user-19700101-000000.tar.gz.sha256" ]'
+check "私密目录清空删掉" '[ ! -d "$PRIVATE_BK" ]'
+check "发通知告诉位置" 'calls | grep -q "TT 守护已卸载"'
+
+echo "[诊断] 自检和诊断包"
+newmod 46
+mkdir -p "$TT_DATA/default-user/chats"; echo "秘密聊天" > "$TT_DATA/default-user/chats/a.jsonl"
+echo "01-01 10:00:00 x" > "$TT_MODDIR/service.log"
+out=$(sh "$TT_MODDIR/ui.sh" selftest)
+if command -v python3 >/dev/null 2>&1; then
+    check "自检是合法 JSON，10 项" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d)==10 and all(set(x)=={\"name\",\"ok\",\"detail\"} for x in d)"'
+fi
+check "自检：数据目录可读" 'printf "%s" "$out" | grep -q "\"name\":\"数据目录\",\"ok\":true"'
+check "自检：还没有备份时报出来" 'printf "%s" "$out" | grep -q "\"name\":\"最新备份\",\"ok\":false"'
+export DIAG_DIR=$T/download
+r=$(sh "$TT_MODDIR/ui.sh" diag)
+f=$(ls "$DIAG_DIR"/tt-guard-diag-*.tar.gz 2>/dev/null | head -1)
+check "诊断包导出到 Download" 'echo "$r" | grep -q "\"ok\":true" && [ -n "$f" ]'
+check "诊断包里有日志、自检、状态" 'tar -tzf "$f" | grep -q service.log && tar -tzf "$f" | grep -q selftest.json && tar -tzf "$f" | grep -q status.txt'
+check "诊断包里没有聊天数据" '! tar -tzf "$f" | grep -q chats && ! tar -xzOf "$f" 2>/dev/null | grep -q 秘密聊天'
+check "诊断用的临时目录删了" '[ ! -e "$TT_MODDIR/.diag" ]'
+unset DIAG_DIR
+
 echo "[service] 不再写 /proc"
 check "没有往 /proc 写东西" '! grep -nE ">[[:space:]]*\"?(/proc|\\\$f)" "$MOD"/*.sh'
 
@@ -533,9 +668,14 @@ echo "[action] 状态输出"
 newmod 8
 mkdir -p "$CG_ROOT/uid_10447/pid_26636"; echo "frozen 0" > "$CG_ROOT/uid_10447/pid_26636/cgroup.events"
 echo 361 > "$BATTERY_TEMP"; mkdir -p "$TT_MODDIR/crash/19700101-000000-5"
-echo "01-01 10:00:00 TT（26636）12:29:36.672 退出：被强制停止（…）［USER REQUESTED / FORCE STOP］" > "$TT_MODDIR/service.log"
-echo "01-01 10:01:00 TT（1）12:00:00.000 退出：内存不够，被系统回收［LOW MEMORY］" >> "$TT_MODDIR/service.log"
-echo "01-01 10:02:00 TT（2）12:00:00.000 退出：内存不够，被系统回收［LOW MEMORY］" >> "$TT_MODDIR/service.log"
+# 假的温度传感器：一个没接（-274000）、一个 125°C 不合理、soc_max 38459 毫摄氏度
+export THERMAL_ROOT=$T/thermal8
+for z in "0 gpu0 -274000" "1 oled_temp 125000" "2 soc_max 38459" "3 board_temp 125000"; do
+    set -- $z; mkdir -p "$THERMAL_ROOT/thermal_zone$1"; echo "$2" > "$THERMAL_ROOT/thermal_zone$1/type"; echo "$3" > "$THERMAL_ROOT/thermal_zone$1/temp"
+done
+echo "01-01 10:00:00 TT（26636）12:29:36.672 退出：强制停止（…）［USER REQUESTED / FORCE STOP］" > "$TT_MODDIR/service.log"
+echo "01-01 10:01:00 TT（1）12:00:00.000 退出：内存不足，被系统回收［LOW MEMORY］" >> "$TT_MODDIR/service.log"
+echo "01-01 10:02:00 TT（2）12:00:00.000 退出：内存不足，被系统回收［LOW MEMORY］" >> "$TT_MODDIR/service.log"
 echo "01-01 2 330 3 1 2 1" > "$TT_MODDIR/stats.txt"
 out=$(FAKE_WL=yes FAKE_RAIB=allow FAKE_BUCKET=5 FAKE_PIDS=26636 FAKE_GEN=1 sh "$TT_MODDIR/action.sh" 2>&1)
 check "白名单" 'echo "$out" | grep -q "电池优化白名单：在"'
@@ -546,11 +686,11 @@ check "生成中" 'echo "$out" | grep -q "正在生成回复：是"'
 check "进程" 'echo "$out" | grep -q "进程 26636：没冻结"'
 check "今天统计" 'echo "$out" | grep -q "今天：生成 2 次，共 5 分；冻结 3 次（生成中 1 次）；被系统结束 2 次，被强制停止 1 次"'
 check "7 天表" 'echo "$out" | grep -q "^01-01 .* 2 .*5 分 .*3(1)"'
-check "退出原因汇总" 'echo "$out" | grep -q "2 内存不够，被系统回收$"'
-check "汇总里强制停止不带括号" 'echo "$out" | grep -q "1 被强制停止$"'
+check "退出原因汇总" 'echo "$out" | grep -q "2 内存不足，被系统回收$"'
+check "汇总里强制停止不带括号" 'echo "$out" | grep -q "1 强制停止$"'
 check "备份一栏" 'echo "$out" | grep -q "还没有备份" && echo "$out" | grep -q "位置：$PRIVATE_BK（只有 root 能读"'
 check "开关一栏" 'echo "$out" | grep -q "备份 1，私密位置 1，自动重开 1，通知 1" && echo "$out" | grep -q "清理 TT 30 天以前的日志（0 = 不清理），温度提醒 45°C（0 = 不提醒），3 天没拷到电脑提醒"'
-check "电池温度" 'echo "$out" | grep -q "电池温度：36°C"'
+check "温度" 'echo "$out" | grep -q "温度：电池 36°C，处理器 38°C，主板 —°C"'
 check "版本" 'echo "$out" | grep -q "TT 版本：2.3.0；系统浏览器内核：com.google.android.webview, 153.0.8010.36"'
 check "空间" 'echo "$out" | grep -q "^聊天和设置 .*，TT 日志 .*，缓存 .*，本模块的备份 "'
 check "崩溃记录份数" 'echo "$out" | grep -q "崩溃记录：1 份（最新 19700101-000000-5）"'

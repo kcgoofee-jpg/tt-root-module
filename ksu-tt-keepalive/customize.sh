@@ -17,6 +17,6 @@ for f in state.txt stats.txt config.txt backup.marker; do
     [ -f "$OLD/$f" ] && cp -f "$OLD/$f" "$MODPATH/$f"
 done
 [ -f "$OLD/service.log" ] && cp -f "$OLD/service.log" "$MODPATH/service.log"
-ui_print "- 只针对 com.tauritavern.client；重启后生效"
-ui_print "- 自动备份 TT 数据（不含 API 密钥），默认放在只有 root 能读的 /data/adb/tt-backups"
-ui_print "- 在 KernelSU 管理器里点本模块，可以打开它的界面"
+ui_print "- TT 守护：仅作用于 com.tauritavern.client，重启后生效"
+ui_print "- 备份位置：/data/adb/tt-backups（私密存储，不含 API 密钥）"
+ui_print "- 在 KernelSU 模块列表中点击本模块可打开界面"

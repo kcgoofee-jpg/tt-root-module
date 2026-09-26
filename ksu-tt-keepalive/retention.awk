@@ -8,6 +8,8 @@
 #   week  最近 weeks 周，每周留最新的一份
 #   month 最近 months 个月，每月留最新的一份
 # 更旧的，或者同一天 / 周 / 月里已经有更新的一份了，就 drop。
+#   pre   恢复前自动存的那份（-prerestore）：这里不管，永远 keep（另有「只留 3 份」的规则）
+# 防呆：系统时间跳到了未来（比最新的备份晚一年多），这次什么都不删。
 
 function dn(y, m, d) {            # 公历日期 → 连续的天数（只用来算差值）
     if (m <= 2) { y--; m += 12 }
@@ -17,6 +19,7 @@ function stamp(name,   s) {       # 文件名里的 YYYYmmdd-HHMM[SS]，拿来�
     s = name; sub(/^.*tt-default-user-/, "", s); sub(/\.tar\.gz$/, "", s)
     return s
 }
+/-prerestore\.tar\.gz$/ { pre[++np] = $0; next }
 {
     # 不用 {8} 这种写法：有的 awk（老的 busybox / mawk）不认
     if ($0 !~ /tt-default-user-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]([0-9][0-9])?\.tar\.gz$/) next
@@ -31,6 +34,11 @@ END {
     }
     ty = substr(today, 1, 4) + 0; tm = substr(today, 5, 2) + 0; td = substr(today, 7, 2) + 0
     now = dn(ty, tm, td)
+    for (i = 1; i <= np; i++) print "keep pre " pre[i]
+    if (n) {
+        y = substr(key[1], 1, 4) + 0; m = substr(key[1], 5, 2) + 0; d = substr(key[1], 7, 2) + 0
+        if (now - dn(y, m, d) > 400) { for (i = 1; i <= n; i++) print "keep new " name[i]; exit }
+    }
     for (i = 1; i <= n; i++) {
         y = substr(key[i], 1, 4) + 0; m = substr(key[i], 5, 2) + 0; d = substr(key[i], 7, 2) + 0
         day = dn(y, m, d); age = now - day
