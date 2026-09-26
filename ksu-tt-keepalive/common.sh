@@ -85,6 +85,8 @@ mac_alert_days=3
 auto_reopen=1
 # 出事时发通知
 notify=1
+# SillyDroid、Termux 里的酒馆运行时不让系统冻结（ColorOS 等会在后台冻结它们，导致生成中断）
+anti_freeze=1
 # 实时副本：聊天等文件变化后，几分钟内把变化的文件复制一份（TT 每次生成完立即复制）
 live=1
 live_minutes=5
@@ -93,7 +95,7 @@ cleanup_days=30
 # 生成回复时电池温度到多少度提醒（0 = 不提醒）
 temp_alert=45'
 # 界面上能改的开关（值只能是数字）
-CONFIG_KEYS="backup backup_hours backup_private keep_days keep_weeks keep_months mac_alert_days auto_reopen notify cleanup_days temp_alert live live_minutes"
+CONFIG_KEYS="backup backup_hours backup_private keep_days keep_weeks keep_months mac_alert_days auto_reopen notify cleanup_days temp_alert live live_minutes anti_freeze"
 
 # 旧版本升级上来的 config.txt：补上没有的新开关（已有的不动），去掉不再用的（backup_keep 换成了 keep_days）
 config_fill() {
@@ -319,6 +321,21 @@ t_running() {
     fi
     [ -n "$(pidof "$(t_pkg "$1")" 2>/dev/null)" ]
 }
+# 防冻结（只用于 SillyDroid 和 Termux 里的 SillyTavern）：它们的 node 服务在后台被冻结后停止响应，生成会停住。
+# 实测 ColorOS 的 hans 在应用级（cgroup 的 uid_<uid>）冻结，系统的 am unfreeze --sticky 对它无效；
+# 这里把应用级和进程级的 cgroup.freeze 写回 0。只在酒馆运行时由 service.sh 调用，应用退出后系统照常管理。
+# $1 目标。输出解冻了几处（0 = 本来就没冻结）
+t_uid() { stat -c %u "$(t_root "$1")" 2>/dev/null; }
+unfreeze_target() (
+    u=$(t_uid "$1"); n=0
+    [ -n "$u" ] && [ "$u" -ge 10000 ] 2>/dev/null || { echo 0; exit; }
+    d=$CG_ROOT/uid_$u
+    for cg in "$d/cgroup.freeze" "$d"/pid_*/cgroup.freeze; do
+        [ -f "$cg" ] && [ "$(cat "$cg" 2>/dev/null)" = 1 ] && echo 0 > "$cg" 2>/dev/null && n=$((n + 1))
+    done
+    echo $n
+)
+
 # 已检测到的目标
 present_targets() { for pt_ in $TARGETS; do t_present "$pt_" && echo "$pt_"; done; }
 

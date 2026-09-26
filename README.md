@@ -34,6 +34,7 @@ SillyDroid 和 Termux 中的 SillyTavern 是常驻的 node 服务，需要保活
 | 恢复 | 界面或电脑菜单中选择备份，按文件名自动识别酒馆。校验 sha256、检查空间、加锁，恢复前自动保存当前数据；备份之后新建的内容不删除；密钥不受影响；属主和 SELinux 标签按原目录还原（含 App 私有目录的分类号）。酒馆运行时拒绝恢复（不会强制停止）。 |
 | 异常通知 | 生成中被冻结、进程退出、网络受限、电池过热；备份连续失败、超过 2 天未备份、存储空间不足；TT 崩溃（同时保存崩溃记录）。 |
 | 诊断 | 冻结 / 解冻记录、退出原因（ApplicationExitInfo）、每日统计、温度（电池 / 处理器 / 主板）、TT 与 WebView 版本变化、自检、导出诊断包。 |
+| 防止冻结 | SillyDroid、Termux 中的 SillyTavern 运行时，每 15 秒检查一次，被冻结就解冻（写该应用的 `cgroup.freeze`）。实测 ColorOS 的 hans 在应用级冻结，系统的 `am unfreeze --sticky` 对它无效；只白名单也挡不住。应用退出后系统照常管理；TT 生成时自带前台服务，不需要。 |
 | 保活设置 | 电池优化白名单、允许后台运行、待机分组不低于「活跃」；每 10 分钟核对；卸载时还原为安装前的值。 |
 | 其他 | 生成中被系统结束时自动重开 TT（最近任务中划掉的除外，10 分钟内最多一次）；每天清理 TT 自身 30 天前的运行日志和错误记录。 |
 
@@ -101,6 +102,7 @@ powershell -ExecutionPolicy Bypass -File pc\install-windows.ps1
 | `temp_alert` | 45 | 生成中电池温度提醒阈值（°C），0 = 关闭 |
 | `live` | 1 | 实时副本 |
 | `live_minutes` | 5 | 实时副本的检查间隔（分钟）；TT 生成结束后立即复制 |
+| `anti_freeze` | 1 | SillyDroid、Termux 中的酒馆运行时防止被系统冻结 |
 
 ## 手动恢复
 
@@ -130,7 +132,7 @@ powershell -ExecutionPolicy Bypass -File pc\install-windows.ps1
 ## 安全说明
 
 - 作用范围：只操作 `com.tauritavern.client`；未安装 TT 时不做任何修改。
-- root 用途：执行上述 Android 命令；读取 cgroup、温度传感器和系统日志；打包、校验、恢复 TT 数据；以 shell 身份（`su 2000`）发送通知；自动重开时 `am start` TT。不写 `/proc`，不写 cgroup，不解冻进程，不修改全局冻结器设置、SELinux 策略或系统属性。
+- root 用途：执行上述 Android 命令；读取 cgroup、温度传感器和系统日志；打包、校验、恢复 TT 数据；以 shell 身份（`su 2000`）发送通知；自动重开时 `am start` TT。不写 `/proc`；cgroup 只在「防止冻结」开启时写 SillyDroid、Termux 这两个应用自己的 `cgroup.freeze`（不影响其他应用），不修改全局冻结器设置、SELinux 策略或系统属性。
 - 数据：不联网；备份不含 `secrets.json`，默认只有 root 可读；诊断包不含聊天数据。
 - 输入：界面传入的开关名和值只接受白名单和数字；备份文件名只接受 `tt-default-user-*.tar.gz` 格式且不含 `..` 和 `/`；恢复前检查压缩包内只有允许的目录、没有 `..`。
 - 资源：TT 运行时每 15 秒检查一次（空闲冻结时降为 60 秒且不调用 `dumpsys`）；备份约 2 秒，最低优先级。

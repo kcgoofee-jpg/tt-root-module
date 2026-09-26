@@ -212,6 +212,23 @@ maybe_backup() {
     done
 }
 
+# 防冻结：SillyDroid / Termux 里的酒馆运行时，被冻结就解冻（见 common.sh 的 unfreeze_target）。
+# 每个目标每次开机第一次解冻时记一行，之后只计数（状态文件 unfrozen_<目标>）
+anti_freeze() {
+    af_on=""
+    [ "$(cfg anti_freeze 1)" = 1 ] || return
+    for tg in sillydroid termux; do
+        t_present "$tg" && t_running "$tg" || continue
+        af_on=1
+        af_n=$(unfreeze_target "$tg")
+        [ "$af_n" -gt 0 ] 2>/dev/null || continue
+        k=$(t_key "$tg" unfrozen); state_set "$k" $(( $(state_get "$k" | tr -cd 0-9) + 1 ))
+        case " $af_logged " in *" $tg "*) ;; *)
+            log "$(t_label "$tg") 在后台被系统冻结，已解冻（运行期间持续防止冻结）"; af_logged="$af_logged $tg" ;;
+        esac
+    done
+}
+
 # 实时副本：TT 每次生成完立即复制变化的文件，其余时间（和其他酒馆）每 live_minutes 分钟一次。
 # 只复制变化过的文件，通常只有几个聊天文件，耗时很短
 maybe_live() {
@@ -405,6 +422,7 @@ tick() {
         after_boot
     fi
 
+    anti_freeze
     maybe_backup
     maybe_live
     check_stale
@@ -429,7 +447,8 @@ main() {
     log "开始运行（版本 $(sed -n 's/^version=//p' "$MODDIR/module.prop")）"
     while true; do
         tick
-        if [ -n "$pids" ] && [ -z "$idle_frozen" ]; then sleep $FAST; else sleep $SLOW; fi
+        # TT 在运行，或正在给别的酒馆防冻结：15 秒一轮；否则 60 秒
+        if { [ -n "$pids" ] && [ -z "$idle_frozen" ]; } || [ -n "$af_on" ]; then sleep $FAST; else sleep $SLOW; fi
     done
 }
 
@@ -451,4 +470,6 @@ disabled_logged=""
 rescued=""
 power_prev=""
 live_fail_log=0
+af_on=""
+af_logged=""
 [ "${TT_KEEPALIVE_TEST:-}" = 1 ] || main

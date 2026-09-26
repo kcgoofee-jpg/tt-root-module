@@ -729,6 +729,7 @@ unset SD_ROOT TERMUX_ST
 
 echo "[service] 不再写 /proc"
 check "没有往 /proc 写东西" '! grep -nE ">[[:space:]]*\"?(/proc|\\\$f)" "$MOD"/*.sh'
+check "写 cgroup 只有防冻结这一处" '[ "$(grep -cE "> \"\\\$cg\"" "$MOD"/*.sh | awk -F: "{ s += \$2 } END { print s }")" = 1 ]'
 
 echo "[action] 状态输出"
 newmod 8
@@ -974,6 +975,33 @@ check "live- 后面乱写：不恢复" '[ $r = 2 ]'
 UNINSTALL_DELAY=0 sh "$TT_MODDIR/uninstall.sh"; i=0
 while [ $i -lt 50 ] && [ -d "$PRIVATE_BK" ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done
 check "卸载：副本移到共享位置" '[ -f "$SHARED_BK/实时副本/tt/default-user/chats/角色 A/1.jsonl" ] && [ ! -d "$PRIVATE_BK" ]'
+
+echo "[防冻结] SillyDroid、Termux"
+newmod 67
+export SD_ROOT=$T/sd67/server TERMUX_ST=$T/tx67/home/SillyTavern
+mkdir -p "$SD_ROOT/data/default-user" "$TERMUX_ST/data/default-user"
+( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0; echo backup=0 > "$CONFIG"
+    U=$CG_ROOT/uid_10447; mkdir -p "$U/pid_5" "$U/pid_6"
+    echo 1 > "$U/cgroup.freeze"; echo 1 > "$U/pid_5/cgroup.freeze"; echo 0 > "$U/pid_6/cgroup.freeze"
+    FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    check "酒馆没运行：不动" '[ "$(cat "$U/cgroup.freeze")" = 1 ] && [ -z "$af_on" ]'
+    FAKE_PIDS=5 FAKE_NOW=$((DAY0 + 60)); tick
+    check "运行中被冻结：应用级、进程级都解冻" '[ "$(cat "$U/cgroup.freeze")" = 0 ] && [ "$(cat "$U/pid_5/cgroup.freeze")" = 0 ] && [ "$(cat "$U/pid_6/cgroup.freeze")" = 0 ]'
+    check "记日志、计数" 'grep -q "SillyDroid 在后台被系统冻结，已解冻" "$LOG" && [ "$(state_get unfrozen_sillydroid)" -ge 1 ]'
+    check "防冻结期间 15 秒一轮" '[ -n "$af_on" ]'
+    echo 1 > "$U/cgroup.freeze"; FAKE_NOW=$((DAY0 + 75)); tick
+    check "再被冻结：再解冻，日志不重复" '[ "$(cat "$U/cgroup.freeze")" = 0 ] && [ "$(grep -c "SillyDroid 在后台被系统冻结" "$LOG")" = 1 ]'
+    check "界面能看到次数" 'sh "$TT_MODDIR/ui.sh" status | grep -q "\"id\":\"sillydroid\".*\"unfrozen\":[1-9]"'
+    echo anti_freeze=0 >> "$CONFIG"; echo 1 > "$U/cgroup.freeze"; FAKE_NOW=$((DAY0 + 90)); tick
+    check "关掉就不动" '[ "$(cat "$U/cgroup.freeze")" = 1 ]'
+    )
+( load
+    mk stat 'echo 1000'   # 系统 uid：绝不碰
+    check "uid 小于 10000（系统进程）：不解冻" '[ "$(unfreeze_target sillydroid)" = 0 ]'
+    mk stat 'echo 10447'
+    )
+unset SD_ROOT TERMUX_ST
 
 pass=$(cat "$T/pass" 2>/dev/null | wc -l | tr -d " "); failn=$(cat "$T/fail" 2>/dev/null | wc -l | tr -d " ")
 echo "通过 ${pass}，失败 $failn"

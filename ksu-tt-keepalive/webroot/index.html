@@ -635,6 +635,7 @@ function keepItems(d) {
 
 /* ---- 3.5 渲染 ---- */
 function render(d) {
+  if (d && d.config) overlayCfg(d.config);
   S = d;
   const now = d.now, b = d.backup, c = d.config, t = d.tt;
   const al = alertsOf(d);
@@ -712,9 +713,10 @@ function renderTargets(d) {
     const is = targetIssue(d, x);
     const run = x.id === "tt" && d.tt.running && d.tt.generating ? "生成中" : x.running ? "运行中" : "未运行";
     const bk = (x.lt ? `${ago(x.lt, now)}备份 · ${x.count} 份` : "暂无备份") + (x.live ? ` · 实时副本 ${ago(x.live, now)}更新` : "");
+    const af = x.id !== "tt" && d.config.anti_freeze && x.unfrozen ? ` · 已阻止冻结 ${x.unfrozen} 次` : "";
     const st = is && x.count ? ` · <span class="${is[0] === "bad" ? "badc" : "warnc"}">${esc(is[1])}</span>` : "";
     return `<div class="row"><div class="main"><div class="title">${esc(x.label)}</div>
-      <div class="sub num">${run} · ${esc(bk)}${st}</div></div>
+      <div class="sub num">${run} · ${esc(bk + af)}${st}</div></div>
       <button class="btn sm" data-bk-target="${esc(x.id)}" aria-label="立即备份 ${esc(x.label)}" ${block ? "disabled" : ""}>立即备份</button></div>`;
   }).join("") : `<div class="empty">未检测到酒馆</div>`;
 }
@@ -847,6 +849,7 @@ const BASIC = [
   ["live", "实时副本", "数据变化后复制变化的文件，TT 每次生成结束后立即复制"],
   ["notify", "异常通知", "关闭后仅记录日志"],
   ["auto_reopen", "自动重启 TT", "生成中被系统结束时重新打开"],
+  ["anti_freeze", "防止冻结", "SillyDroid、Termux 中的酒馆运行时不被系统冻结"],
 ];
 const ADV = [
   ["backup_hours", "备份间隔", "数据变化时的最短间隔", [1, 2, 3, 4, 6, 8, 12, 24, 48], (v) => `${v} 小时`],
@@ -890,16 +893,25 @@ function renderSettings(c, force) {
 }
 /* 依次写入，避免连续点击时乱序 */
 let setChain = Promise.resolve();
+/* 刚改过的设置：保存期间和之后 15 秒内以此为准（避免保存前发出的刷新把开关显示回旧值） */
+const recentCfg = {};
+function overlayCfg(c) {
+  const now = Date.now();
+  for (const [k, v] of Object.entries(recentCfg)) { if (v.until && v.until < now) delete recentCfg[k]; else c[k] = v.val; }
+  return c;
+}
 function setKey(key, val) {
-  const old = S.config[key]; S.config[key] = val; renderSettings(S.config, true);
+  const old = S.config[key]; S.config[key] = val; recentCfg[key] = { val, until: 0 }; renderSettings(S.config, true);
   acting++;
   setChain = setChain.then(async () => {
     try {
       const r = await ui(`set ${key} ${val | 0}`);
       if (!r || !r.ok) throw new Error((r && r.msg) || "未知错误");
+      recentCfg[key].until = Date.now() + 15000;
       if (key === "backup_private") { toast(val ? "已切换到私密存储" : "已切换到共享存储"); await load(true); }
       else if (key === "backup" && S) render(S);
     } catch (e) {
+      delete recentCfg[key];
       S.config[key] = old; renderSettings(S.config, true); toast("设置失败：" + e.message);
     } finally { acting--; }
   });
@@ -1173,7 +1185,7 @@ function demo(args, raw) {
   const day = (o) => { const d = new Date((now - o * D) * 1000); return `${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
   const tOf = (n) => { const m = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(n); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : 0; };
   const mk = (tg, list, base = 0) => list.map(([o, tier], i) => ({ name: stamp(now - base - o, tier === "pre" ? "prerestore" : "", tg), target: tg, tier, kb: KB[tg] - i * 120, verified: !(tg === "tt" && i === 5) }));
-  const tgt = (id, o) => Object.assign({ id, label: LABEL[id], pkg: PKG[id], installed: true, present: true, running: false, last: null, check: null, fails: 0, count: 0, live: now - 3 * 60, live_files: 312 }, o);
+  const tgt = (id, o) => Object.assign({ id, label: LABEL[id], pkg: PKG[id], installed: true, present: true, running: false, last: null, check: null, fails: 0, count: 0, live: now - 3 * 60, live_files: 312, unfrozen: id === "tt" ? 0 : 14 }, o);
   /* 按备份文件重新计算各酒馆的份数；items 新的在前 */
   const sync = (s) => {
     s.backup.items.sort((a, b) => tOf(b.name) - tOf(a.name));
@@ -1204,7 +1216,7 @@ function demo(args, raw) {
           ...mk("sillydroid", [[5 * H, "new"], [30 * H, "2d"], [4 * D, "day"]]),
           ...mk("termux", [[26 * H, "new"], [3 * D, "day"], [9 * D, "week"]]),
         ] },
-      config: { backup: 1, backup_hours: 6, backup_private: 1, keep_days: 7, keep_weeks: 4, keep_months: 6, mac_alert_days: 3, auto_reopen: 1, notify: 1, cleanup_days: 30, temp_alert: 45, live: 1, live_minutes: 5 },
+      config: { backup: 1, backup_hours: 6, backup_private: 1, keep_days: 7, keep_weeks: 4, keep_months: 6, mac_alert_days: 3, auto_reopen: 1, notify: 1, cleanup_days: 30, temp_alert: 45, live: 1, live_minutes: 5, anti_freeze: 1 },
       log: ["开始运行（版本 1.6）", "已检测到：TauriTavern、SillyDroid、SillyTavern（Termux）", "已备份并校验 TauriTavern 数据：" + stamp(now - 8 * H) + "（45400 KB，不含 API 密钥）", "TT（4976）被 Android 冻结", "已备份并校验 SillyDroid 数据：" + stamp(now - 5 * H, "", "sillydroid") + "（18200 KB）", "已备份并校验 TauriTavern 数据：" + stamp(now - 2 * H) + "（45390 KB）；按分层保留清理 1 份旧备份"]
         .map((l, i) => `${day(0)} ${p2(8 + i)}:1${i}:0${i} ${l}`),
       _recheck: 0,
