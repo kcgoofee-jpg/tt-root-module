@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# KernelSU 管理器里点模块的「执行」按钮：只读，显示 TT 现在的后台状态、最近的退出原因和日志
+# KernelSU 管理器里点模块的「执行」按钮：只读，显示 TT 现在的状态、今天和最近 7 天的统计、备份和最近的日志
 MODDIR=${TT_MODDIR:-${0%/*}}
 . "$MODDIR/common.sh"
 
@@ -25,12 +25,33 @@ else
     # 系统自己记的优先级（冻结和查杀按这个判断：900 及以上会被冻结）
     dumpsys activity processes "$PKG" 2>/dev/null | awk -v p="$PKG" '/\*APP\*/{m=index($0, ":" p "/")>0} m&&/oom adj:/{sub(/^ */,""); print "系统记录的 " $0} m&&/isFrozen=/{match($0,/isFrozen=[a-z]*/); print "系统记录的 " substr($0,RSTART,RLENGTH); m=0}'
 fi
-today=$(date '+%m-%d')
-count() { c=$(grep -c "$1" "$LOG" 2>/dev/null); echo "${c:-0}"; }
-echo "今天被冻结：$(count "^$today .*冻结了") 次（生成中 $(count "^$today .*冻结了（正在生成") 次）"
+echo "今天：生成 $(stat_get 2) 次，共 $(human_secs "$(stat_get 3)")；冻结 $(stat_get 4) 次（生成中 $(stat_get 5) 次）；被系统结束 $(stat_get 6) 次，被强制停止 $(stat_get 7) 次"
+
+echo "== 最近 7 天 =="
+if [ -s "$STATS" ]; then
+    echo "日期   生成  时长   冻结(生成中)  被系统结束  被强制停止"
+    tail -n 7 "$STATS" | while read -r d g gs f gf k st; do
+        printf '%s  %4s  %-6s %4s(%s)  %6s  %8s\n' "$d" "$g" "$(human_secs "$gs")" "$f" "$gf" "$k" "$st"
+    done
+else
+    echo "还没有统计（1.4 起才有）"
+fi
+r=$(grep "退出：" "$LOG" 2>/dev/null | sed 's/.*退出：//; s/［.*//; s/（.*//' | sort | uniq -c | sort -rn)
+[ -n "$r" ] && { echo "退出原因（最近 7 天）："; echo "$r" | sed 's/^ */  /'; }
 
 echo "== 最近 3 次 TT 退出（系统记录）=="
 exit_records | head -n 3 | while IFS= read -r rec; do exit_line "$rec"; done
+echo "== 备份 =="
+if [ "$(cfg backup 1)" = 1 ]; then
+    n=$(ls "$BACKUP_DIR"/tt-default-user-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+    newest=$(ls "$BACKUP_DIR"/tt-default-user-*.tar.gz 2>/dev/null | sort | tail -n 1)
+    echo "每天一次，留 $(cfg backup_keep 7) 份；现有 $n 份${newest:+，最新 ${newest##*/}}"
+    echo "位置：内部存储/Documents/TauriTavern-backup（不含 API 密钥）"
+else
+    echo "已关（config.txt 里 backup=0）"
+fi
+echo "== 开关（模块目录的 config.txt）=="
+echo "备份 $(cfg backup 1)，自动重开 $(cfg auto_reopen 1)，通知 $(cfg notify 1)（1 开 0 关）"
 [ -f "$PRIOR" ] && { echo "== 装模块前的原值（卸载时还原）=="; grep -v '^#' "$PRIOR"; }
 echo "== 最近的日志 =="
 tail -n 10 "$LOG" 2>/dev/null

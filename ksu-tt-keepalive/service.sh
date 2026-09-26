@@ -9,11 +9,17 @@
 #      这个设置系统会存盘，重启后还在；卸载时还原成改之前的分组
 # 下面几条只看不改：
 #   4. TT 被 Android 或 ColorOS 冻结 / 解冻时记一行（含冻了多久、当时是否在生成回复）
-#   5. TT 进程没了时，把系统记的退出原因（ApplicationExitInfo）翻成人话记一行
-#   6. TT 正在生成回复（它自己开着前台服务）时被冻结或进程没了：发一条通知
+#   5. TT 进程没了时，把系统记的退出原因（ApplicationExitInfo）翻成人话记一行；被系统杀的，顺带记系统日志里是谁动的手
+#   6. TT 正在生成回复（它自己开着前台服务）时被冻结、进程没了或网络被限制：发一条通知
+#   7. 每天统计：生成几次、多久，冻结几次，被系统结束 / 被强制停止几次（stats.txt，留 8 天）；
+#      当天生成累计超过 5 小时提醒一次（Android 15 起这类前台服务每 24 小时最多约 6 小时）
+#   8. TT 升级、重装时记一行
+# 另外两件（config.txt 里可以关）：
+#   9. 每天备份一次 TT 的数据到 /sdcard/Documents/TauriTavern-backup（不含 API 密钥），留最近 7 份
+#  10. TT 生成回复到一半被「系统」杀掉（不是你划掉、不是强制停止）时，自动重新打开 TT，10 分钟内最多一次
 # 不再调 /proc/<pid>/oom_score_adj（1.2 及以前做过）：系统决定冻结和查杀都不看它，还会被改回去。
 # 生成回复时 TT 2.3.0 自己开前台服务，系统优先级约 200，本来就不会被 Android 冻结；空闲时被冻结是正常省电。
-# 不联网、不下载、不含可执行文件；日志写在本模块目录的 service.log，最多 200 行。
+# 不联网、不下载、不含可执行文件；日志写在本模块目录的 service.log，留最近 7 天。
 
 MODDIR=${TT_MODDIR:-${0%/*}}
 . "$MODDIR/common.sh"
@@ -21,6 +27,18 @@ MODDIR=${TT_MODDIR:-${0%/*}}
 FAST=15      # TT 在运行时的检查间隔（秒）
 SLOW=60      # TT 没在运行时
 CHECK=600    # 白名单 / 后台运行 / 待机分组的核对间隔
+QUOTA=18000  # 当天生成累计到这么多秒就提醒一次（5 小时）
+REOPEN_GAP=600
+
+DEFAULT_CONFIG='# TauriTavern 保活模块的开关（1 开 0 关）。改完不用重启，最多 1 分钟后生效。
+# 每天备份一次 TT 的数据到 /sdcard/Documents/TauriTavern-backup（不含 API 密钥）
+backup=1
+# 备份留几份
+backup_keep=7
+# 生成回复到一半被系统杀掉时，自动重新打开 TT
+auto_reopen=1
+# 出事时发通知
+notify=1'
 
 # 第一次运行（装上后第一次开机）：记下改之前的原值，卸载时还原成它
 record_prior() {
@@ -58,11 +76,22 @@ ensure() {
             log "待机分组 $b → 10（活跃）"
         fi ;;
     esac
-    uid=$(app_uid)
+    new_uid=$(app_uid)
+    old_uid=$(state_get tt_uid)
+    [ -n "$old_uid" ] && [ -n "$new_uid" ] && [ "$old_uid" != "$new_uid" ] && log "TT 重装过（uid $old_uid → $new_uid）"
+    [ -n "$new_uid" ] && [ "$new_uid" != "$old_uid" ] && state_set tt_uid "$new_uid"
+    uid=$new_uid
+    v=$(tt_version)
+    old_v=$(state_get tt_version)
+    [ -n "$old_v" ] && [ -n "$v" ] && [ "$old_v" != "$v" ] && log "TT 版本 $old_v → $v"
+    [ -n "$v" ] && [ "$v" != "$old_v" ] && state_set tt_version "$v"
     return 0
 }
 
-# 记下新的退出记录；生成回复到一半进程没了就发通知
+# 通知（config.txt 里 notify=0 就不发，只记日志）
+alert() { [ "$(cfg notify 1)" = 1 ] && notify "$1" "$2"; }
+
+# 记下新的退出记录；生成回复到一半进程没了就发通知，被系统杀的按开关自动重开
 report_exits() {
     died_in_gen=""
     if [ "$gen_prev" = 1 ]; then
@@ -73,21 +102,76 @@ report_exits() {
     new_exits | while IFS= read -r rec; do
         [ -n "$rec" ] || continue
         log "$(exit_line "$rec")"
+        r=$(echo "$rec" | cut -d'|' -f3)
+        if system_kill "$r"; then
+            stat_add 6 1
+            src=$(kill_source "$(echo "$rec" | cut -d'|' -f2)")
+            [ -n "$src" ] && log "  系统日志：$src"
+        elif [ "$r" = "USER REQUESTED" ]; then
+            stat_add 7 1
+        fi
         echo "$rec"
     done > "$STATE.exits"
     newest=$(tail -n 1 "$STATE.exits" 2>/dev/null | cut -d'|' -f1)
     [ -n "$newest" ] && state_set last_exit "$newest"
     if [ -n "$died_in_gen" ]; then
+        gen_end; check_quota
         rec=$(grep "^[^|]*|$died_in_gen|" "$STATE.exits" | tail -n 1)
+        r=$(echo "$rec" | cut -d'|' -f3)
         if [ -n "$rec" ]; then
-            why=$(exit_reason_zh "$(echo "$rec" | cut -d'|' -f3)" "$(echo "$rec" | cut -d'|' -f4)")
+            why=$(exit_reason_zh "$r" "$(echo "$rec" | cut -d'|' -f4)")
         else
-            why="系统没记原因"
+            why="系统没记原因"; r=unknown
             log "TT（$died_in_gen）生成回复时进程没了，系统没记原因"
         fi
-        notify "TT 生成回复到一半进程没了" "原因：$why。Claude Max 代理会暂存回复，重开 TT 后会补回。"
+        extra="打开 TT 后，Claude Max 代理会补回暂存的回复。"
+        if { system_kill "$r" || [ "$r" = unknown ]; } && [ "$(cfg auto_reopen 1)" = 1 ] \
+            && [ $((now - last_reopen)) -ge $REOPEN_GAP ]; then
+            if am start -n "$PKG/.MainActivity" >/dev/null 2>&1; then
+                last_reopen=$now
+                log "已自动重新打开 TT"
+                extra="已自动重新打开 TT，Claude Max 代理会补回暂存的回复。"
+            fi
+        fi
+        alert "TT 生成回复到一半进程没了" "原因：$why。$extra"
     fi
     rm -f "$STATE.exits"
+}
+
+# 一次生成结束：记进当天统计
+gen_end() {
+    [ -n "$gen_start" ] || return
+    stat_add 2 1
+    stat_add 3 $((now - gen_start))
+    gen_start=""
+}
+
+# 当天生成累计快到上限时提醒一次
+check_quota() {
+    secs=$(stat_get 3)
+    [ "${secs:-0}" -ge $QUOTA ] || return
+    [ "$(state_get quota_day)" = "$(date +%m-%d)" ] && return
+    state_set quota_day "$(date +%m-%d)"
+    log "今天生成累计 $(human_secs "$secs")，快到 Android 的前台服务上限（每 24 小时约 6 小时）"
+    alert "TT 今天生成已累计 $(human_secs "$secs")" "Android 限制这类后台生成每 24 小时约 6 小时，超过后 TT 在后台可能停住，放前台就没事。"
+}
+
+# 每天备份一次（生成中不备份；失败 1 小时后再试）
+maybe_backup() {
+    [ "$(cfg backup 1)" = 1 ] || return
+    [ "$installed" = yes ] && [ "$gen" = 0 ] || return
+    last=$(state_get last_backup); last=${last:-0}
+    tried=$(state_get backup_try); tried=${tried:-0}
+    [ $((now - last)) -ge 86400 ] && [ $((now - tried)) -ge 3600 ] || return
+    state_set backup_try "$now"
+    if bf=$(backup_now); then
+        state_set last_backup "$now"
+        kb=$(du -k "$bf" 2>/dev/null | cut -f1)
+        prune_backups "$(cfg backup_keep 7)"
+        log "已备份 TT 数据：${bf##*/}（$kb KB，不含 API 密钥）"
+    else
+        log "备份 TT 数据失败，1 小时后再试"
+    fi
 }
 
 tick() {
@@ -100,7 +184,12 @@ tick() {
     pids=$(pidof "$PKG" 2>/dev/null)
     gen=0
     [ -n "$pids" ] && generating && gen=1
-    [ "$gen" = 1 ] && [ "$gen_prev" != 1 ] && gen_alerted=""
+    if [ "$gen" = 1 ] && [ "$gen_prev" != 1 ]; then gen_alerted=""; net_alerted=""; gen_start=$now; fi
+    [ "$gen" = 0 ] && [ "$gen_prev" = 1 ] && [ -n "$pids" ] && { gen_end; check_quota; }
+
+    # 换了一天：日志只留 7 天
+    day=$(date +%m-%d)
+    [ "$day" != "$last_day" ] && { prune_log; last_day=$day; }
 
     if [ "$pids" != "$prev_pids" ] || [ $((now - last_exit_scan)) -ge $CHECK ]; then
         report_exits
@@ -111,10 +200,12 @@ tick() {
         by=$(frozen_by "$pid" "$uid")
         if [ -n "$by" ] && [ -z "$frozen_since" ]; then
             frozen_since=$now
+            stat_add 4 1
             if [ "$gen" = 1 ]; then
+                stat_add 5 1
                 log "TT（$pid）被 $by 冻结了（正在生成回复）"
                 if [ -z "$gen_alerted" ]; then
-                    notify "TT 生成回复时被 $by 冻结了" "回复可能停住。点开 TT 就会解冻；Claude Max 代理会暂存回复。"
+                    alert "TT 生成回复时被 $by 冻结了" "回复可能停住。打开 TT 就会解冻；Claude Max 代理会暂存回复。"
                     gen_alerted=1
                 fi
             else
@@ -126,6 +217,18 @@ tick() {
         fi
     done
     [ -z "$pids" ] && frozen_since=""
+
+    # 生成中网络被系统限制：提醒一次
+    if [ "$gen" = 1 ] && [ -z "$net_alerted" ]; then
+        n=$(net_effective "$uid")
+        if [ -n "$n" ] && [ "$n" != NONE ]; then
+            log "TT 生成回复时网络被限制（$n）"
+            alert "TT 生成回复时网络被系统限制了" "限制：$n。回复可能收不到，打开 TT 看看。"
+            net_alerted=1
+        fi
+    fi
+
+    maybe_backup
 
     gen_prev=$gen
     prev_pids=$pids
@@ -140,6 +243,7 @@ main() {
         first=$(exit_records | head -n 1 | cut -d'|' -f1)
         state_set last_exit "${first:-0}"
     fi
+    [ -f "$CONFIG" ] || echo "$DEFAULT_CONFIG" > "$CONFIG"
     log "开始运行（版本 $(sed -n 's/^version=//p' "$MODDIR/module.prop")）"
     while true; do
         tick
@@ -154,5 +258,9 @@ last_exit_scan=0
 prev_pids=""
 gen_prev=0
 gen_alerted=""
+net_alerted=""
+gen_start=""
 frozen_since=""
+last_reopen=0
+last_day=""
 [ "${TT_KEEPALIVE_TEST:-}" = 1 ] || main

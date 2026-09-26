@@ -2,7 +2,8 @@
 # 卸载模块时把 service.sh 改过的设置还原成装模块之前的值（记在 prior.txt；没记的按 Android 默认）。
 # KernelSU / Magisk 在开机早期（系统服务还没起来）运行这个脚本、随后删掉模块目录：
 # 所以先把 prior.txt 读进变量，再在后台等开机完成后才执行 dumpsys / cmd / am。
-# 模块只改过这三样（白名单、后台运行、待机分组），其余都是只读；日志和状态文件随模块目录一起删掉。
+# 模块只改过这三样（白名单、后台运行、待机分组），其余都是只读；日志、状态、统计、开关随模块目录一起删掉。
+# 备份（内部存储/Documents/TauriTavern-backup）是你的数据，卸载时不删，不要了可以自己删。
 PKG=com.tauritavern.client
 MODDIR=${TT_MODDIR:-${0%/*}}
 DELAY=${UNINSTALL_DELAY:-10}

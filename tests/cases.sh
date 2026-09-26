@@ -1,5 +1,5 @@
 # 单元测试的用例：由 tests/run.sh 用 dash / sh / ksh 各跑一遍（手机上是 busybox ash 或 mksh）。
-# 用 PATH 里的假命令代替 dumpsys / cmd / am / pm / pidof / su / getprop / stat / date / sleep，
+# 用 PATH 里的假命令代替 dumpsys / cmd / am / pm / pidof / su / getprop / stat / date / sleep / logcat，
 # 它们按 FAKE_* 环境变量回答，改动类命令记到 $CALLS。模块脚本本身不改一行地被测。
 set -u
 HERE=${TESTS_DIR:?}
@@ -13,9 +13,12 @@ bad()  { echo . >> "$T/fail"; echo "  ✗ $*"; }
 check() { if eval "$2"; then ok; else bad "$1"; fi; }
 
 # ---------- 假命令 ----------
+export TZ=UTC
+REAL_DATE=$(command -v date); REAL_SLEEP=$(command -v sleep); SH=$(command -v sh)
+export REAL_DATE
 # run.sh 给了 TEST_BIN 就共用（macOS 第一次执行新文件要扫描，约 0.3 秒一个）
 BIN=${TEST_BIN:-$T/bin}; mkdir -p "$BIN"
-mk() { printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1.new"
+mk() { printf '#!%s\n%s\n' "$SH" "$2" > "$BIN/$1.new"
        if cmp -s "$BIN/$1.new" "$BIN/$1"; then rm -f "$BIN/$1.new"; else mv "$BIN/$1.new" "$BIN/$1"; chmod +x "$BIN/$1"; fi; }
 mk dumpsys 'case "$1 ${2:-}" in
   "deviceidle whitelist")
@@ -23,7 +26,8 @@ mk dumpsys 'case "$1 ${2:-}" in
       *) [ "$FAKE_WL" = yes ] && echo "user,com.tauritavern.client,10447"; echo "system,com.android.shell,2000" ;; esac ;;
   "activity services") if [ "$FAKE_GEN" = 1 ]; then cat "$FIX/services-generating.txt"; else cat "$FIX/services-idle.txt"; fi ;;
   "activity exit-info") cat "$FAKE_EXIT" 2>/dev/null ;;
-  "netpolicy ") cat "$FIX/netpolicy.txt" ;;
+  "package com.tauritavern.client") echo "    versionName=$FAKE_VER" ;;
+  "netpolicy ") sed "s/effective=NONE/effective=$FAKE_NET/" "$FIX/netpolicy.txt" ;;
 esac'
 mk cmd 'case "$1 $2" in
   "appops get") echo "$4: $FAKE_RAIB" ;;
@@ -31,19 +35,25 @@ mk cmd 'case "$1 $2" in
   "notification post") echo "cmd $*" >> "$CALLS" ;;
 esac'
 mk am 'case "$1" in get-standby-bucket) echo "$FAKE_BUCKET" ;; *) echo "am $*" >> "$CALLS" ;; esac'
+mk logcat 'cat "$FAKE_LOGCAT" 2>/dev/null'
 mk pm '[ "$FAKE_INSTALLED" = 1 ]'
 mk pidof 'echo "$FAKE_PIDS"'
-mk su 'echo "su $*" >> "$CALLS"; [ "$1" = 2000 ] && [ "$2" = -c ] && sh -c "$3"'
+mk su 'echo "su $*" >> "$CALLS"; [ "$1" = 2000 ] && [ "$2" = -c ] && eval "$3"'
 mk getprop 'echo 1'
 mk stat 'echo 10447'
 mk sleep ':'
-mk date 'if [ "${1:-}" = +%s ]; then echo "$FAKE_NOW"; else exec /bin/date "$@"; fi'
+# date：永远是 FAKE_NOW 那一刻；支持 date -d @秒数（Mac 的 date 用 -r，手机上的用 -d）
+mk date '[ "${1:-}" = +%s ] && { echo "$FAKE_NOW"; exit; }
+t=$FAKE_NOW; [ "${1:-}" = -d ] && { t=${2#@}; shift 2; }
+if "$REAL_DATE" -r 0 +%s >/dev/null 2>&1; then exec "$REAL_DATE" -r "$t" "$@"; else exec "$REAL_DATE" -d "@$t" "$@"; fi'
 export PATH="$BIN:$PATH" FIX CALLS=$T/calls
 export FAKE_WL=no FAKE_GEN=0 FAKE_EXIT=$FIX/exit-info.txt FAKE_RAIB=default FAKE_BUCKET=5 FAKE_INSTALLED=1 FAKE_PIDS="" FAKE_NOW=1000
+export FAKE_VER=2.3.0 FAKE_NET=NONE FAKE_LOGCAT=/nonexistent
+DAY0=86400   # 1970-01-02 00:00 UTC，按天算的用例从这里开始
 
 newmod() {   # 新建一个空的模块目录（放进脚本），设好环境
     D=$T/mod$1; rm -rf "$D"; mkdir -p "$D"; cp "$MOD"/*.sh "$MOD/module.prop" "$D/"
-    export TT_MODDIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1
+    export TT_MODDIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1 TT_DATA=$T/data$1 BACKUP_DIR=$T/backup$1
     : > "$CALLS"
 }
 calls() { cat "$CALLS"; }
@@ -164,14 +174,153 @@ newmod 7; ( load
     check "下一次生成再通知" '[ "$(calls | grep -c "^cmd notification")" = 2 ]'
     )
 
+echo "[1.4] 开关、统计、日志按天清理"
+newmod 20; ( load
+    check "没写开关用默认" '[ "$(cfg backup 1)" = 1 ]'
+    printf '# 注释 backup=0\nbackup=0\nauto_reopen=0  # 行尾注释\n' > "$CONFIG"
+    check "读开关" '[ "$(cfg backup 1)" = 0 ]'
+    check "行尾注释" '[ "$(cfg auto_reopen 1)" = 0 ]'
+    echo "$DEFAULT_CONFIG" > "$CONFIG"
+    check "默认 config 是全开" '[ "$(cfg backup 0)$(cfg backup_keep 0)$(cfg auto_reopen 0)$(cfg notify 0)" = 1711 ]'
+    FAKE_NOW=$DAY0
+    check "没统计时是 0" '[ "$(stat_get 3)" = 0 ]'
+    stat_add 2 1; stat_add 3 40; stat_add 3 5
+    check "累加" '[ "$(stat_get 2)" = 1 ] && [ "$(stat_get 3)" = 45 ]'
+    check "一行七列" '[ "$(cat "$STATS")" = "01-02 1 45 0 0 0 0" ]'
+    i=1; while [ $i -le 10 ]; do FAKE_NOW=$((DAY0 + i * 86400)); stat_add 4 1; i=$((i + 1)); done
+    check "统计只留 8 天" '[ "$(wc -l < "$STATS" | tr -d " ")" = 8 ]'
+    FAKE_NOW=$((DAY0 + 9 * 86400))
+    check "最近几天" '[ "$(recent_days 3)" = "01-11 01-10 01-09" ]'
+    printf '01-03 a\n01-04 b\n01-05 c\n01-11 d\n' > "$LOG"
+    prune_log
+    check "日志只留 7 天" '[ "$(cut -c1-5 "$LOG" | tr "\n" " ")" = "01-05 01-11 " ]'
+    check "human_secs" '[ "$(human_secs 3900)" = "1 小时 5 分" ] && [ "$(human_secs 59)" = "0 分" ] && [ "$(human_secs "")" = "0 分" ]'
+    )
+
+echo "[1.4] 生成统计、5 小时提醒、网络提醒"
+newmod 21; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    FAKE_PIDS=800 FAKE_GEN=0 FAKE_NOW=$DAY0; tick
+    FAKE_GEN=1 FAKE_NOW=$((DAY0 + 15)); tick
+    FAKE_NOW=$((DAY0 + 30)); tick
+    FAKE_GEN=0 FAKE_NOW=$((DAY0 + 60)); tick
+    check "一次生成 45 秒" '[ "$(stat_get 2)" = 1 ] && [ "$(stat_get 3)" = 45 ]'
+    check "没到 5 小时不提醒" '! calls | grep -q "^cmd notification"'
+    stat_add 3 17950
+    FAKE_GEN=1 FAKE_NOW=$((DAY0 + 100)); tick
+    FAKE_GEN=0 FAKE_NOW=$((DAY0 + 130)); tick
+    check "到 5 小时提醒" 'calls | grep -q "^cmd notification.*今天生成已累计 5 小时"'
+    FAKE_GEN=1 FAKE_NOW=$((DAY0 + 200)); tick
+    FAKE_GEN=0 FAKE_NOW=$((DAY0 + 230)); tick
+    check "一天只提醒一次" '[ "$(calls | grep -c "^cmd notification.*今天生成已累计")" = 1 ]'
+    : > "$CALLS"
+    FAKE_NET=APP_BACKGROUND FAKE_GEN=1 FAKE_NOW=$((DAY0 + 300)); tick
+    FAKE_NOW=$((DAY0 + 315)); tick
+    check "生成中网络被限制记日志" 'grep -q "网络被限制（APP_BACKGROUND）" "$LOG"'
+    check "网络提醒一次" '[ "$(calls | grep -c "^cmd notification.*网络被系统限制")" = 1 ]'
+    FAKE_GEN=0 FAKE_NOW=$((DAY0 + 330)); tick
+    : > "$CALLS"; FAKE_NET=APP_BACKGROUND
+    FAKE_NOW=$((DAY0 + 345)); tick
+    check "不在生成时不管网络" '! calls | grep -q notification'
+    )
+
+echo "[1.4] 生成中被系统杀：自动重开、谁动的手、统计"
+newmod 22; ( load
+    FAKE_WL=yes FAKE_RAIB=allow; state_set last_exit "2026-09-26 12:14:07.288"
+    echo "09-26 12:17:18.700  1000  2000 I athena : kill pid 26440 reason=bg_clean" > "$T/logcat"; FAKE_LOGCAT=$T/logcat
+    FAKE_EXIT=$T/none FAKE_PIDS=26440 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
+    FAKE_EXIT=$FIX/exit-info.txt FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
+    check "重开 TT" 'calls | grep -q "^am start -n com.tauritavern.client/.MainActivity"'
+    check "日志：已自动重新打开" 'grep -q "已自动重新打开 TT" "$LOG"'
+    check "通知里说了" 'calls | grep -q "^cmd notification.*内存不够.*已自动重新打开"'
+    check "记下谁动的手" 'grep -q "  系统日志：.*athena : kill pid 26440" "$LOG"'
+    check "被系统结束 +1，强制停止 +1" '[ "$(stat_get 6)" = 1 ] && [ "$(stat_get 7)" = 1 ]'
+    check "生成也算一次" '[ "$(stat_get 2)" = 1 ]'
+    )
+newmod 23; ( load
+    FAKE_WL=yes FAKE_RAIB=allow; state_set last_exit "2026-09-26 12:17:18.751"
+    FAKE_EXIT=$T/none FAKE_PIDS=26636 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
+    FAKE_EXIT=$FIX/exit-info.txt FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
+    check "强制停止不重开" '! calls | grep -q "^am start"'
+    check "但通知" 'calls | grep -q "^cmd notification.*被强制停止"'
+    )
+newmod 24; ( load
+    FAKE_WL=yes FAKE_RAIB=allow; echo auto_reopen=0 > "$CONFIG"; state_set last_exit "2026-09-26 12:14:07.288"
+    FAKE_EXIT=$T/none FAKE_PIDS=26440 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
+    FAKE_EXIT=$FIX/exit-info.txt FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
+    check "关了自动重开就不重开" '! calls | grep -q "^am start"'
+    )
+newmod 25; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    FAKE_PIDS=1 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
+    FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
+    FAKE_PIDS=2 FAKE_GEN=1 FAKE_NOW=$((DAY0 + 30)); tick
+    FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 45)); tick
+    check "10 分钟内只重开一次" '[ "$(calls | grep -c "^am start")" = 1 ]'
+    echo notify=0 > "$CONFIG"; : > "$CALLS"
+    FAKE_PIDS=3 FAKE_GEN=1 FAKE_NOW=$((DAY0 + 900)); tick
+    FAKE_PIDS="" FAKE_GEN=0 FAKE_NOW=$((DAY0 + 915)); tick
+    check "notify=0 不发通知" '! calls | grep -q notification'
+    check "notify=0 照样记日志" '[ "$(grep -c "系统没记原因" "$LOG")" = 3 ]'
+    )
+
+echo "[1.4] TT 升级、重装"
+newmod 26; ( load
+    FAKE_WL=yes FAKE_RAIB=allow
+    ensure
+    check "第一次只记下不报" '! grep -q "TT 版本" "$LOG" && [ "$(state_get tt_version)" = 2.3.0 ]'
+    FAKE_VER=2.4.0; ensure
+    check "升级记一行" 'grep -q "TT 版本 2.3.0 → 2.4.0" "$LOG"'
+    state_set tt_uid 10001; ensure
+    check "重装记一行" 'grep -q "TT 重装过（uid 10001 → 10447）" "$LOG"'
+    )
+
+echo "[1.4] 每天备份"
+newmod 27; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    U=$TT_DATA/default-user; mkdir -p "$U/chats/角色 A" "$U/backups" "$U/thumbnails" "$U/OpenAI Settings"
+    echo hi > "$U/chats/角色 A/1.jsonl"; echo '{"api_key":"sk-SECRET"}' > "$U/secrets.json"
+    echo old > "$U/backups/x"; mkdir -p "$U/.staging"; echo w > "$U/.staging/w"; echo t > "$U/thumbnails/t"; echo s > "$U/settings.json"; echo p > "$U/OpenAI Settings/p.json"
+    FAKE_PIDS=9 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
+    check "生成中不备份" '[ -z "$(ls "$BACKUP_DIR" 2>/dev/null)" ]'
+    FAKE_GEN=0 FAKE_NOW=$((DAY0 + 15)); tick
+    f=$(ls "$BACKUP_DIR"/tt-default-user-*.tar.gz 2>/dev/null | head -1)
+    check "备份出来了" '[ -n "$f" ]'
+    list=$(LC_ALL=en_US.UTF-8 tar -tzf "$f" 2>/dev/null)   # Mac 的 tar 在 C 语言环境下会把中文转义
+    check "有聊天（带空格和中文的路径）" 'echo "$list" | grep -q "default-user/chats/角色 A/1.jsonl"'
+    check "有设置" 'echo "$list" | grep -q "default-user/settings.json" && echo "$list" | grep -q "OpenAI Settings/p.json"'
+    check "没有 API 密钥" '! echo "$list" | grep -q secrets && ! tar -xzOf "$f" 2>/dev/null | grep -q sk-SECRET'
+    check "没有 TT 自己的备份和缩略图" '! echo "$list" | grep -qE "default-user/(backups|thumbnails|\.staging)/"'
+    check "没留半截文件" '[ -z "$(ls -a "$BACKUP_DIR" | grep part)" ]'
+    check "记日志（文件名和大小）" 'grep -q "已备份 TT 数据：tt-default-user-19700102-0000.tar.gz（[0-9][0-9]* KB" "$LOG"'
+    FAKE_NOW=$((DAY0 + 3600)); tick
+    check "一天只备份一次" '[ "$(ls "$BACKUP_DIR" | wc -l | tr -d " ")" = 1 ]'
+    echo backup_keep=2 > "$CONFIG"
+    for k in 1 2 3; do FAKE_NOW=$((DAY0 + 15 + k * 86400)); tick; done
+    check "只留 2 份，删最旧的" '[ "$(ls "$BACKUP_DIR" | tr "\n" " ")" = "tt-default-user-19700104-0000.tar.gz tt-default-user-19700105-0000.tar.gz " ]'
+    echo backup=0 > "$CONFIG"; FAKE_NOW=$((DAY0 + 15 + 5 * 86400)); tick
+    check "关了就不备份" '[ "$(ls "$BACKUP_DIR" | wc -l | tr -d " ")" = 2 ]'
+    )
+newmod 28; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    check "没有数据时记失败" 'grep -q "备份 TT 数据失败，1 小时后再试" "$LOG"'
+    FAKE_NOW=$((DAY0 + 600)); tick
+    check "1 小时内不重试" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 1 ]'
+    FAKE_NOW=$((DAY0 + 3700)); tick
+    check "1 小时后重试" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 2 ]'
+    )
+
 echo "[service] 不再写 /proc"
 check "没有往 /proc 写东西" '! grep -nE ">[[:space:]]*\"?(/proc|\\\$f)" "$MOD"/*.sh'
 
 echo "[action] 状态输出"
 newmod 8
 mkdir -p "$CG_ROOT/uid_10447/pid_26636"; echo "frozen 0" > "$CG_ROOT/uid_10447/pid_26636/cgroup.events"
-echo "$(/bin/date '+%m-%d') 10:00:00 TT（1）被 Android 冻结了" > "$TT_MODDIR/service.log"
-echo "$(/bin/date '+%m-%d') 10:01:00 TT（1）被 Android 冻结了（正在生成回复）" >> "$TT_MODDIR/service.log"
+echo "01-01 10:00:00 TT（26636）12:29:36.672 退出：被强制停止（…）［USER REQUESTED / FORCE STOP］" > "$TT_MODDIR/service.log"
+echo "01-01 10:01:00 TT（1）12:00:00.000 退出：内存不够，被系统回收［LOW MEMORY］" >> "$TT_MODDIR/service.log"
+echo "01-01 10:02:00 TT（2）12:00:00.000 退出：内存不够，被系统回收［LOW MEMORY］" >> "$TT_MODDIR/service.log"
+echo "01-01 2 330 3 1 2 1" > "$TT_MODDIR/stats.txt"
 out=$(FAKE_WL=yes FAKE_RAIB=allow FAKE_BUCKET=5 FAKE_PIDS=26636 FAKE_GEN=1 sh "$TT_MODDIR/action.sh" 2>&1)
 check "白名单" 'echo "$out" | grep -q "电池优化白名单：在"'
 check "后台运行" 'echo "$out" | grep -q "后台运行：allow"'
@@ -179,15 +328,22 @@ check "分组" 'echo "$out" | grep -q "待机分组：5（豁免"'
 check "网络" 'echo "$out" | grep -q "网络：没被限制"'
 check "生成中" 'echo "$out" | grep -q "正在生成回复：是"'
 check "进程" 'echo "$out" | grep -q "进程 26636：没冻结"'
-check "冻结次数" 'echo "$out" | grep -q "今天被冻结：2 次（生成中 1 次）"'
-check "最近三次退出" '[ "$(echo "$out" | grep -c "退出：")" = 3 ]'
+check "今天统计" 'echo "$out" | grep -q "今天：生成 2 次，共 5 分；冻结 3 次（生成中 1 次）；被系统结束 2 次，被强制停止 1 次"'
+check "7 天表" 'echo "$out" | grep -q "^01-01 .* 2 .*5 分 .*3(1)"'
+check "退出原因汇总" 'echo "$out" | grep -q "2 内存不够，被系统回收$"'
+check "汇总里强制停止不带括号" 'echo "$out" | grep -q "1 被强制停止$"'
+check "备份一栏" 'echo "$out" | grep -q "现有 0 份"'
+check "开关一栏" 'echo "$out" | grep -q "备份 1，自动重开 1，通知 1"'
+check "最近三次退出" '[ "$(echo "$out" | grep -c "^TT（.*退出：")" = 3 ]'
 check "action 不改任何东西" '[ ! -s "$CALLS" ]'
 out=$(FAKE_PIDS="" sh "$TT_MODDIR/action.sh" 2>&1)
 check "没运行" 'echo "$out" | grep -q "TT 没在运行"'
-check "没有日志时次数为 0" 'rm -f "$TT_MODDIR/service.log"; FAKE_PIDS="" sh "$TT_MODDIR/action.sh" | grep -q "今天被冻结：0 次（生成中 0 次）"'
+check "没有统计时为 0" 'rm -f "$TT_MODDIR/service.log" "$TT_MODDIR/stats.txt"; FAKE_PIDS="" sh "$TT_MODDIR/action.sh" | grep -q "今天：生成 0 次，共 0 分；冻结 0 次"'
+check "没有统计时的提示" 'FAKE_PIDS="" sh "$TT_MODDIR/action.sh" | grep -q "还没有统计"'
+check "关掉备份" 'echo backup=0 > "$TT_MODDIR/config.txt"; FAKE_PIDS="" sh "$TT_MODDIR/action.sh" | grep -q "已关（config.txt 里 backup=0）"'
 
 echo "[uninstall] 还原"
-wait_calls() { i=0; while [ $i -lt 50 ] && [ "$(wc -l < "$CALLS" | tr -d " ")" -lt "$1" ]; do /bin/sleep 0.1; i=$((i + 1)); done; }
+wait_calls() { i=0; while [ $i -lt 50 ] && [ "$(wc -l < "$CALLS" | tr -d " ")" -lt "$1" ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done; }
 newmod 9; printf 'whitelist=no\nRUN_IN_BACKGROUND=ignore\nRUN_ANY_IN_BACKGROUND=default\nbucket=40\n' > "$TT_MODDIR/prior.txt"
 UNINSTALL_DELAY=0 sh "$TT_MODDIR/uninstall.sh"; wait_calls 4
 check "撤白名单" 'calls | grep -q "whitelist -com.tauritavern.client"'
@@ -205,10 +361,13 @@ check "没有 prior 按默认" 'calls | grep -q "whitelist -com" && [ "$(calls |
 echo "[customize] 升级时带上原值、状态、日志"
 newmod 12; OLD=$T/old; mkdir -p "$OLD" "$T/new"
 echo whitelist=yes > "$OLD/prior.txt"; echo last_exit=x > "$OLD/state.txt"; echo l > "$OLD/service.log"
+echo backup=0 > "$OLD/config.txt"; echo "01-01 1 2 3 4 5 6" > "$OLD/stats.txt"
 ( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD; . "$MOD/customize.sh" )
 check "prior" 'grep -qx whitelist=yes "$T/new/prior.txt"'
 check "state" 'grep -qx last_exit=x "$T/new/state.txt"'
 check "log" '[ -f "$T/new/service.log" ]'
+check "开关" 'grep -qx backup=0 "$T/new/config.txt"'
+check "统计" '[ -f "$T/new/stats.txt" ]'
 rm -rf "$T/new" "$OLD/prior.txt"; mkdir -p "$T/new"
 ( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD; . "$MOD/customize.sh" )
 check "从 1.0/1.1 升级按默认" 'grep -qx whitelist=no "$T/new/prior.txt"'
