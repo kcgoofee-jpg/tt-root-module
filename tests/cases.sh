@@ -1003,6 +1003,22 @@ mkdir -p "$SD_ROOT/data/default-user" "$TERMUX_ST/data/default-user"
     )
 unset SD_ROOT TERMUX_ST
 
+echo "[事件记录] 备份扫描图、生成时间"
+newmod 68; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"
+    FAKE_PIDS=9 FAKE_GEN=0 FAKE_NOW=$DAY0; tick
+    check "完整备份记一条 B" 'grep -q "^$DAY0 B tt" "$EVENTS"'
+    FAKE_GEN=1 FAKE_NOW=$((DAY0 + 15)); tick; FAKE_GEN=0 FAKE_NOW=$((DAY0 + 135)); tick
+    check "生成结束记 G 和秒数" 'grep -q "^$((DAY0 + 135)) G tt 120$" "$EVENTS"'
+    echo "$((DAY0 - 20 * 86400)) B tt" >> "$EVENTS"; FAKE_NOW=$((DAY0 + 86400)); tick
+    check "换天时只留 15 天" '! grep -q "^$((DAY0 - 20 * 86400)) " "$EVENTS"'
+    out=$(sh "$TT_MODDIR/ui.sh" status)
+    check "status 里有事件、实时副本大小、隔离列表" 'printf "%s" "$out" | grep -q "\"events\":\[\"" && printf "%s" "$out" | grep -q "\"live_kb\":{\"tt\":" && printf "%s" "$out" | grep -q "\"broken\":\["'
+    sh "$TT_MODDIR/ui.sh" mark-pulled mac >/dev/null; sh "$TT_MODDIR/ui.sh" mark-pulled mac >/dev/null
+    check "同步到电脑：最新备份没变时只记一次" '[ "$(grep -c " S all" "$EVENTS")" = 1 ]'
+    )
+
 pass=$(cat "$T/pass" 2>/dev/null | wc -l | tr -d " "); failn=$(cat "$T/fail" 2>/dev/null | wc -l | tr -d " ")
 echo "通过 ${pass}，失败 $failn"
 [ "$failn" = 0 ]

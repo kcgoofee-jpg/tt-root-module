@@ -149,6 +149,7 @@ gen_end() {
     [ -n "$gen_start" ] || return
     stat_add 2 1
     stat_add 3 $((now - gen_start))
+    event G tt $((now - gen_start))
     gen_start=""
 }
 
@@ -206,6 +207,7 @@ maybe_backup() {
         else
             fk=$(t_key "$tg" backup_fails)
             fails=$(( $(state_get "$fk") + 1 )); state_set "$fk" "$fails"
+            event F "$tg"
             log "备份 $(t_label "$tg") 数据失败（连续第 $fails 次），1 小时后再试"
             [ "$fails" = 3 ] && alert "$(t_label "$tg") 备份连续失败 3 次" "请在 KernelSU 中打开 TT 守护查看详情。"
         fi
@@ -246,6 +248,7 @@ maybe_live() {
         [ -d "$GDIR/.restore.lock" ] && continue
         if lv_n=$(live_sync "$tg"); then
             state_set "$k" "$now"
+            [ "$lv_n" -gt 0 ] 2>/dev/null && event L "$tg" "$lv_n"
             [ "$lv_last" = 0 ] && log "已建立 $(t_label "$tg") 的实时副本（$lv_n 个文件）"
         elif [ $((now - live_fail_log)) -ge 3600 ]; then
             log "$(t_label "$tg") 实时副本复制失败，稍后重试"

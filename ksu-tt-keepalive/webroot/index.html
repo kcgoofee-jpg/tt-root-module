@@ -126,6 +126,22 @@ svg.i { width: 20px; height: 20px; flex: none; }
 
 /* ---- 1.7 分组与卡片 ---- */
 .section { margin-top: 24px; }
+.scan { padding: 12px 14px; }
+.scan .sch { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; list-style: none; cursor: default; }
+.scan .sch::-webkit-details-marker { display: none; }
+.scan .sch b { font-size: 14px; font-weight: 600; flex: none; white-space: nowrap; }
+.scan .sch span { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; }
+details.scan > .sch { cursor: pointer; margin-bottom: 0; }
+details.scan[open] > .sch { margin-bottom: 8px; }
+.hgrid { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 2px; align-items: center; }
+.hgrid .dl { font-size: 11px; color: var(--faint); text-align: right; padding-right: 4px; font-variant-numeric: tabular-nums; }
+.hgrid .hl { font-size: 10px; color: var(--faint); text-align: center; }
+.cell { aspect-ratio: 1; border-radius: 2px; background: var(--surface-2); padding: 0; border: 0; min-width: 0; }
+.cell.sel { outline: 2px solid var(--text); outline-offset: 0; }
+.blocks { display: grid; grid-template-columns: repeat(30, 1fr); gap: 2px; }
+.slg { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.slg i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.sdet { margin-top: 6px; font-size: 12px; color: var(--muted); min-height: 1.4em; }
 .sh { display: flex; align-items: center; gap: 8px; margin: 0 4px 8px; min-height: 28px; }
 .sh h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0; letter-spacing: .04em; }
 .sh .btn { margin-left: auto; margin-right: -4px; color: var(--accent); border-color: transparent; background: transparent; }
@@ -336,6 +352,20 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
       <option value="7">rc 7 另一个恢复</option><option value="8">rc 8 空间不够</option><option value="9">rc 9 校验失败</option>
     </select>
   </div>
+
+  <!-- 最顶端：备份扫描（每格 1 小时）、存储块图；生成时间默认折叠 -->
+  <section class="section" style="margin-top:0" aria-label="备份扫描与存储">
+    <div class="card scan"><div class="sch"><b>备份扫描</b><span>最近 14 天 · 每格 1 小时</span></div>
+      <div class="hgrid" id="scan" role="grid" aria-label="备份扫描"></div>
+      <div class="sdet" id="scan-det" aria-live="polite">点按格子查看详情</div>
+      <div class="slg"><span><i style="background:var(--ok)"></i>完整备份</span><span><i style="background:var(--accent-line)"></i>实时副本</span><span><i style="background:var(--info)"></i>恢复前备份</span><span><i style="background:var(--warn-mark)"></i>已同步到电脑</span><span><i style="background:var(--danger)"></i>失败 / 已隔离</span></div></div>
+    <div class="card scan"><div class="sch"><b>存储</b><span id="blk-sub"></span></div>
+      <div class="blocks" id="blk" aria-label="备份占用"></div>
+      <div class="slg" id="blk-lg"></div></div>
+    <details class="card scan" id="heat-box"><summary class="sch"><b>生成时间</b><span id="heat-sub">最近 7 天</span></summary>
+      <div class="hgrid" id="heat" aria-label="生成时间"></div>
+      <div class="slg"><span>少</span><span><i style="background:var(--accent-soft)"></i><i style="background:var(--accent-line)"></i><i style="background:var(--ok);opacity:.55"></i><i style="background:var(--ok)"></i></span><span>多</span></div></details>
+  </section>
 
   <!-- 首屏：状态 + 三项指标 + 立即备份 -->
   <section class="hero" id="hero" aria-labelledby="verdict">
@@ -690,6 +720,7 @@ function render(d) {
   $("#alerts").innerHTML = al.map(([k, tt, s, act]) =>
     `<div class="alert ${k}" role="listitem">${k === "info" ? IC.info : IC.warn}<div class="tx"><b>${esc(tt)}</b><span>${esc(s)}</span></div>${act ? `<button class="act" data-act="${act[1]}">${esc(act[0])}</button>` : ""}</div>`).join("");
 
+  renderScan(d);
   renderTargets(d);
   renderBackups(d);
   renderKeep(d);
@@ -703,6 +734,67 @@ function metric(sel, v, [cls, icon, s]) {
   const vv = $(".v", el); vv.classList.remove("sk"); vv.textContent = v;
   $(".s", el).innerHTML = `${icon || ""}<span>${esc(s || "\u00a0")}</span>`;
 }
+
+/* ---- 备份扫描（每格 1 小时）、存储块图、生成时间热力图 ---- */
+const EV_NAME = { B: "完整备份", P: "恢复前备份", F: "备份失败", X: "校验失败，已隔离", L: "实时副本更新", S: "已同步到电脑", G: "生成" };
+const EV_RANK = { X: 6, F: 5, P: 4, S: 3, B: 2, L: 1 };
+const EV_COLOR = { X: "var(--danger)", F: "var(--danger)", P: "var(--info)", S: "var(--warn-mark)", B: "var(--ok)", L: "var(--accent-line)" };
+const p2s = (n) => String(n).padStart(2, "0");
+const dayKey = (t) => { const d = new Date(t * 1000); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+function eventsOf(d) {
+  const ev = (d.events || []).map((l) => { const [t, k, g, v] = String(l).split(" "); return { t: +t, k, g, v: +v || 0 }; }).filter((e) => e.t && EV_NAME[e.k]);
+  /* 升级前没有事件记录：用现有备份的文件名补上 */
+  for (const it of (d.backup && d.backup.items) || []) {
+    const t = nameTime(it.name); if (!t) continue;
+    const k = isPre(it) ? "P" : "B", g = targetOf(it);
+    if (!ev.some((e) => e.k === k && e.g === g && Math.abs(e.t - t) < 120)) ev.push({ t, k, g, v: 0 });
+  }
+  return ev;
+}
+function hourGrid(el, days, now, cellFn) {
+  const today = new Date(now * 1000); today.setHours(0, 0, 0, 0);
+  let h = '<span></span>'; for (let i = 0; i < 24; i++) h += `<span class="hl">${i % 6 === 0 ? i : ""}</span>`;
+  for (let r = days - 1; r >= 0; r--) {
+    const d0 = new Date(today.getTime() - r * 864e5);
+    h += `<span class="dl">${d0.getMonth() + 1}/${d0.getDate()}</span>`;
+    for (let i = 0; i < 24; i++) h += cellFn(d0.getTime() / 1000 + i * 3600, `${d0.getMonth() + 1}/${d0.getDate()} ${p2s(i)}:00`);
+  }
+  el.innerHTML = h;
+}
+let scanSel = null;
+function renderScan(d) {
+  const now = d.now, ev = eventsOf(d), by = {};
+  for (const e of ev) { const k = Math.floor(e.t / 3600); (by[k] = by[k] || []).push(e); }
+  hourGrid($("#scan"), 14, now, (t0, label) => {
+    const list = by[Math.floor(t0 / 3600)] || [], top = list.reduce((a, e) => (EV_RANK[e.k] || 0) > (EV_RANK[a && a.k] || 0) ? e : a, null);
+    const fut = t0 > now;
+    const desc = fut ? "" : list.length ? list.filter((e) => e.k !== "G").map((e) => `${EV_NAME[e.k]}${e.g && e.g !== "all" ? "（" + (TGT[e.g] || e.g) + "）" : ""}${e.k === "L" && e.v ? " " + e.v + " 个文件" : ""}`).join("、") || "无变化" : "无变化";
+    return `<button class="cell" data-t="${t0}" data-d="${esc(label + " · " + (desc || "尚未到达"))}" aria-label="${esc(label + " " + desc)}" style="${top && EV_COLOR[top.k] ? "background:" + EV_COLOR[top.k] : ""}${fut ? ";opacity:.35" : ""}"></button>`;
+  });
+  $$("#scan .cell").forEach((b) => b.onclick = () => { $$("#scan .cell.sel").forEach((x) => x.classList.remove("sel")); b.classList.add("sel"); scanSel = b.dataset.t; $("#scan-det").textContent = b.dataset.d; });
+  if (scanSel) { const b = $(`#scan .cell[data-t="${scanSel}"]`); if (b) { b.classList.add("sel"); $("#scan-det").textContent = b.dataset.d; } }
+  /* 存储块图：按酒馆分色，坏块红色 */
+  const items = (d.backup && d.backup.items) || [], lk = d.live_kb || {}, broken = d.broken || [];
+  const parts = [["tt", "var(--accent)"], ["sillydroid", "var(--info)"], ["termux", "var(--warn-mark)"]].map(([id, c]) => ({ id, c, kb: items.filter((it) => targetOf(it) === id).reduce((a, it) => a + (it.kb || 0), 0) }));
+  const live = Object.values(lk).reduce((a, v) => a + (v || 0), 0), total = parts.reduce((a, p) => a + p.kb, 0) + live;
+  const unit = Math.max(1024, Math.ceil(total / 150 / 1024) * 1024), n = (kb) => kb ? Math.max(1, Math.round(kb / unit)) : 0;
+  let bh = "";
+  for (const p of parts) bh += `<span class="cell" title="${esc(TGT[p.id])}" style="background:${p.c}"></span>`.repeat(n(p.kb));
+  bh += `<span class="cell" style="background:var(--accent-line)"></span>`.repeat(n(live));
+  bh += broken.map((b) => `<span class="cell" title="${esc(b)}" style="background:var(--danger)"></span>`).join("");
+  $("#blk").innerHTML = bh || `<span class="cell"></span>`;
+  $("#blk-sub").textContent = `共 ${kb(total)} · 每格约 ${kb(unit)} · 剩余 ${kb(d.free)}`;
+  $("#blk-lg").innerHTML = parts.filter((p) => p.kb).map((p) => `<span><i style="background:${p.c}"></i>${esc(TGT[p.id])} ${kb(p.kb)}</span>`).join("")
+    + (live ? `<span><i style="background:var(--accent-line)"></i>实时副本 ${kb(live)}</span>` : "")
+    + (broken.length ? `<span class="badc"><i style="background:var(--danger)"></i>已隔离 ${broken.length} 个</span>` : "");
+  /* 生成时间：每小时累计秒数 */
+  const gs = {}; let wk = 0;
+  for (const e of ev) if (e.k === "G" && e.t > now - 7 * 86400) { const k = Math.floor(e.t / 3600); gs[k] = (gs[k] || 0) + e.v; wk += e.v; }
+  const shade = (v) => !v ? "" : v < 300 ? "var(--accent-soft)" : v < 900 ? "var(--accent-line)" : v < 1800 ? "color-mix(in srgb, var(--ok) 55%, transparent)" : "var(--ok)";
+  hourGrid($("#heat"), 7, now, (t0, label) => { const v = gs[Math.floor(t0 / 3600)] || 0; return `<span class="cell" title="${esc(label)} 生成 ${Math.round(v / 60)} 分钟" style="${v ? "background:" + shade(v) : ""}"></span>`; });
+  $("#heat-sub").textContent = `最近 7 天 · 共 ${human(wk)}`;
+}
+function human(s) { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h ? `${h} 小时 ${m} 分` : `${m} 分钟`; }
 
 /* 酒馆：已安装的每个一行；未检测到数据的以次要样式显示 */
 function renderTargets(d) {
@@ -1217,6 +1309,12 @@ function demo(args, raw) {
           ...mk("termux", [[26 * H, "new"], [3 * D, "day"], [9 * D, "week"]]),
         ] },
       config: { backup: 1, backup_hours: 6, backup_private: 1, keep_days: 7, keep_weeks: 4, keep_months: 6, mac_alert_days: 3, auto_reopen: 1, notify: 1, cleanup_days: 30, temp_alert: 45, live: 1, live_minutes: 5, anti_freeze: 1 },
+      events: (() => { const e = []; for (let dd = 13; dd >= 0; dd--) { const base = now - dd * D;
+          for (const hh of [1, 7, 13, 19]) if ((dd * 7 + hh) % 5 !== 0) e.push(`${base - (base % H) - (new Date(base * 1000).getHours() - hh) * H} B tt 0`);
+          for (let g = 0; g < 4; g++) { const t = base - (base % H) - (new Date(base * 1000).getHours() - 21 - g % 3) * H; e.push(`${t} G tt ${600 + ((dd * 13 + g * 7) % 5) * 500}`); e.push(`${t + 300} L tt 3`); } }
+        e.push(`${now - 9 * D} X tt 0`, `${now - 4 * D} P tt 0`, `${now - 2 * D} S all 0`, `${now - 5 * H} L sillydroid 2`);
+        return e.filter((l) => +l.split(" ")[0] <= now); })(),
+      live_kb: { tt: 98000, sillydroid: 21000, termux: 0 }, broken: ["tt-default-user-20260917-030000.tar.gz.broken"],
       log: ["开始运行（版本 1.6）", "已检测到：TauriTavern、SillyDroid、SillyTavern（Termux）", "已备份并校验 TauriTavern 数据：" + stamp(now - 8 * H) + "（45400 KB，不含 API 密钥）", "TT（4976）被 Android 冻结", "已备份并校验 SillyDroid 数据：" + stamp(now - 5 * H, "", "sillydroid") + "（18200 KB）", "已备份并校验 TauriTavern 数据：" + stamp(now - 2 * H) + "（45390 KB）；按分层保留清理 1 份旧备份"]
         .map((l, i) => `${day(0)} ${p2(8 + i)}:1${i}:0${i} ${l}`),
       _recheck: 0,

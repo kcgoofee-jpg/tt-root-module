@@ -52,7 +52,17 @@ recent_days() {
 }
 
 # 日志只留最近 7 天
+# 事件记录（界面的备份扫描图、生成时间热力图用）：一行「时间 类型 目标 数值」，留 15 天。
+# 类型：B 完整备份 P 恢复前备份 F 备份失败 X 校验失败已隔离 L 实时副本更新 S 已同步到电脑 G 生成（数值为秒）
+EVENTS=${EVENTS:-$GDIR/events.txt}
+event() { echo "$(date +%s) $*" >> "$EVENTS" 2>/dev/null; }
+prune_events() {
+    [ -f "$EVENTS" ] || return
+    awk -v since=$(( $(date +%s) - 15 * 86400 )) '$1 >= since' "$EVENTS" > "$EVENTS.tmp" && mv "$EVENTS.tmp" "$EVENTS"
+}
+
 prune_log() {
+    prune_events
     [ -f "$LOG" ] || return
     keep=$(recent_days 7)
     awk -v keep=" $keep " 'index(keep, " " $1 " ") > 0' "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
@@ -482,6 +492,7 @@ backup_now() {
     fi
     set +f
     if [ $good = 1 ]; then
+        if [ -n "${2:-}" ]; then event P "$bt_"; else event B "$bt_"; fi
         [ -n "${2:-}" ] || mv "$m.new" "$m"
         rm -f "$m.new"
         fix_bk_perms "$d"
@@ -511,7 +522,7 @@ check_backups() {
         want=$(cut -d' ' -f1 "$d/$n.sha256")
         got=$( { sha256sum "$d/$n" 2>/dev/null || shasum -a 256 "$d/$n"; } | cut -d' ' -f1)
         [ "$want" = "$got" ] && continue
-        mv "$d/$n" "$d/$n.broken" && rm -f "$d/$n.sha256" && echo "$n"
+        mv "$d/$n" "$d/$n.broken" && rm -f "$d/$n.sha256" && event X "$cb_" && echo "$n"
     done
 }
 

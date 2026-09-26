@@ -99,6 +99,18 @@ status() {
         printf '"%s":%s' "$k" "$(num "$(cfg "$k" "$v")")"
     done
     printf '},'
+    # 备份扫描图、存储块图、生成时间热力图用
+    printf '"events":'
+    awk -v since=$(( now - 14 * 86400 )) '$1 >= since' "$EVENTS" 2>/dev/null | jlines
+    printf ',"live_kb":{'
+    first=1
+    for t in $TARGETS; do
+        [ $first = 1 ] || printf ','; first=0
+        printf '"%s":%s' "$t" "$(num "$(du -sk "$(live_dir "$t")" 2>/dev/null | cut -f1)")"
+    done
+    printf '},"broken":'
+    ls "$(bdir)" 2>/dev/null | grep '\.broken$' | jlines
+    printf ','
     printf '"log":'
     tail -n 80 "$LOG" 2>/dev/null | jlines
     printf '}\n'
@@ -219,6 +231,9 @@ case "${1:-}" in
             echo "$n $(du -k "$d/$n" 2>/dev/null | cut -f1) $(cut -d' ' -f1 "$d/$n.sha256" 2>/dev/null)"
         done ;;
     mark-pulled)
+        # 电脑每小时也会调一次（表示「还连着」）：只有最新的备份和上次不同，才记一条「已同步」事件
+        nb=$(list_backups | head -n 1)
+        [ -n "$nb" ] && [ "$nb" != "$(state_get pulled_newest)" ] && { event S all; state_set pulled_newest "$nb"; }
         state_set mac_pulled "$(date +%s)"
         h=$(printf '%s' "${2:-}" | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
         [ -n "$h" ] && state_set pc_host "$h"
