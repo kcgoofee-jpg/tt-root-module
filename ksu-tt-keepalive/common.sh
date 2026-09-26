@@ -2,6 +2,9 @@
 # 只读系统状态、只动 com.tauritavern.client 一个包；所有外部命令都是 Android 自带的。
 # 测试时（tests/run.sh）用同名 shell 函数替换 dumpsys / cmd / am / pidof 等，并改下面几个路径。
 
+# KernelSU 启动 service.sh 时 umask 是 0，新建的文件会变成人人可写；改回常规的 022
+umask 022
+
 PKG=com.tauritavern.client
 MODDIR=${TT_MODDIR:-${0%/*}}
 LOG=${LOG:-$MODDIR/service.log}

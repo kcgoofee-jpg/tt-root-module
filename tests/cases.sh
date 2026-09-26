@@ -67,6 +67,8 @@ newmod 1; ( load
     check "new_exits 只要更新的、旧的在前" '[ "$(echo "$n" | cut -d"|" -f2 | tr "\n" " ")" = "26440 26636 " ]'
     state_set last_exit "2026-09-26 12:29:36.672"
     check "没有新的时为空" '[ -z "$(new_exits)" ]'
+    ( umask 000; . "$TT_MODDIR/common.sh"; state_set x 1 )
+    check "新建文件不是人人可写" '[ "$(ls -l "$STATE" | cut -c9)" = "-" ]'
     check "state_set 覆盖不重复" '[ "$(grep -c ^last_exit= "$STATE")" = 1 ]'
     )
 

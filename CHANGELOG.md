@@ -1,5 +1,9 @@
 # 更新记录
 
+## 1.3.1（2026-09-26）
+
+- 修：KernelSU 启动脚本时 umask 是 0，`state.txt` 被建成人人可写（`rw-rw-rw-`）；现在脚本开头设 `umask 022`。`/data/adb` 本来只有 root 能进，没有实际风险。
+
 ## 1.3（2026-09-26）
 
 实测（OnePlus PLC110 / Android 16）后重新定位：TT 2.3.0 生成回复时自己开前台服务（`AiGenerationForegroundService`，dataSync），系统优先级约 200，不会被 Android 冻结；空闲时被冻结是正常省电，不影响回复。今天 TT 的 8 次重启全是「强制停止」（电脑上的 `am force-stop`），没有一次是系统查杀。所以 1.3 把重点放在「看清楚、出事告诉你」。
