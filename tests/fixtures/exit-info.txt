@@ -1,0 +1,21 @@
+---- TIME 2026/9/26 13:01:28 ----
+ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)
+Last Timestamp of Persistence Into Persistent Storage: 2026-09-26 12:53:39.287
+  package: com.tauritavern.client
+    Historical Process Exit for uid=10447
+        ApplicationExitInfo #0:
+          timestamp=2026-09-26 12:29:36.680 pid=29809 realUid=99010 packageUid=10447 definingUid=10205 user=0
+          process=com.google.android.webview:sandboxed_process0:org.chromium.content.app.SandboxedProcessService0:0 reason=13 (OTHER KILLS BY SYSTEM) subreason=17 (ISOLATED NOT NEEDED) status=0
+          importance=300 pss=0.00 rss=355MB description=isolated not needed state=empty trace=null
+        ApplicationExitInfo #1:
+          timestamp=2026-09-26 12:29:36.672 pid=26636 realUid=10447 packageUid=10447 definingUid=10447 user=0
+          process=com.tauritavern.client reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=400 pss=0.00 rss=459MB description=stop com.tauritavern.client due to from pid 1387 state=71 bytes trace=null
+        ApplicationExitInfo #2:
+          timestamp=2026-09-26 12:17:18.751 pid=26440 realUid=10447 packageUid=10447 definingUid=10447 user=0
+          process=com.tauritavern.client reason=3 (LOW MEMORY) subreason=0 (UNKNOWN) status=0
+          importance=400 pss=0.00 rss=428MB state=71 bytes trace=null
+        ApplicationExitInfo #3:
+          timestamp=2026-09-26 12:14:07.288 pid=26245 realUid=10447 packageUid=10447 definingUid=10447 user=0
+          process=com.tauritavern.client reason=2 (SIGNALED) status=9
+          importance=325 pss=0.00 rss=0.00 description=oplus athena kill state=71 bytes trace=null

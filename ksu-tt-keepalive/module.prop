@@ -1,6 +1,6 @@
 id=claudemax_tt_keepalive
 name=TauriTavern 后台保活（Claude Max）
-version=1.2
-versionCode=3
+version=1.3
+versionCode=4
 author=SillyTavern-ClaudeMax
-description=只针对 TauriTavern（com.tauritavern.client）：免电池优化、允许后台运行（丢了自动补）、待机分组保持活跃；TT 被冻结时记日志（挡不住冻结）。不联网、不含二进制，卸载时还原成装之前的设置。
+description=只针对 TauriTavern（com.tauritavern.client）：免电池优化、允许后台运行（丢了自动补）；记录冻结和进程退出原因，生成回复中被冻结或被杀时发通知。不联网、不含二进制，卸载时还原成装之前的设置。

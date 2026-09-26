@@ -1,0 +1,3 @@
+  UID=10447: true
+  UID=10447 state={procState=TOP ,seq=52309,cap=LCMNFUAT} blocked_state={blocked=APP_BACKGROUND,allowed=FOREGROUND|TOP|POWER_SAVE_ALLOWLIST,effective=NONE} 
+  UID=10999 state={procState=CEM ,seq=1,cap=--------} blocked_state={blocked=APP_BACKGROUND,allowed=NONE,effective=APP_BACKGROUND} 

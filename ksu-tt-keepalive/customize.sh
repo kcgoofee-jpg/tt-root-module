@@ -1,6 +1,6 @@
 # 安装时由 KernelSU / Magisk 执行（source 进安装脚本，不是单独运行）。只做一件事：
-# 升级安装时把旧版本记下的原值（prior.txt）和日志带到新版本，卸载时才能还原成装模块之前的样子。
-OLD=/data/adb/modules/claudemax_tt_keepalive
+# 升级安装时把旧版本记下的原值（prior.txt）、状态和日志带到新版本，卸载时才能还原成装模块之前的样子。
+OLD=${OLD_MODDIR:-/data/adb/modules/claudemax_tt_keepalive}
 if [ -f "$OLD/prior.txt" ]; then
     cp -f "$OLD/prior.txt" "$MODPATH/prior.txt"
 elif [ -d "$OLD" ]; then
@@ -13,5 +13,6 @@ elif [ -d "$OLD" ]; then
         echo "RUN_ANY_IN_BACKGROUND=default"
     } > "$MODPATH/prior.txt"
 fi
+[ -f "$OLD/state.txt" ] && cp -f "$OLD/state.txt" "$MODPATH/state.txt"
 [ -f "$OLD/service.log" ] && cp -f "$OLD/service.log" "$MODPATH/service.log"
 ui_print "- 只针对 com.tauritavern.client；重启后生效"

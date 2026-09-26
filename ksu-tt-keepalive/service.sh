@@ -6,47 +6,26 @@
 #   2. 允许后台运行（appops RUN_IN_BACKGROUND / RUN_ANY_IN_BACKGROUND）
 #   1、2 每 10 分钟核对一次，丢了就补（比如重装过 TT）；改之前把原来的值记在本模块目录的 prior.txt，卸载时还原成它
 #   3. 待机分组：只在被系统降到「活跃」以下时拉回「活跃」（在白名单里时是 5「豁免」，更好，不去碰）。
-#      这个设置系统会存盘（/data/system/users/0/app_idle_stats.xml），重启后还在；卸载时还原成改之前的分组
-#   4. TT 的进程在后台时，把 /proc/<pid>/oom_score_adj 从系统给的值（实测 450）降到 250。
-#      注意：作用很有限。Android 决定冻结（cached apps freezer，adj ≥ freezer_cutoff_adj 900）和
-#      lmkd 决定先杀谁，用的都是系统自己记的优先级，不读这个文件；系统每次调整 TT 的优先级也会把它改回去。
-#      它只影响内核自己的 OOM（很少发生）。「被冻结」只能靠下面第 5 条看，这一条挡不住。
-#      TT 开着时每 15 秒看一次，前台时系统设的 0 不去碰
-#   5. 只记录、不干预：TT 被 Android 或 ColorOS 冻结 / 解冻时记一行，便于判断回复为什么停住
-# 不联网、不下载、不含可执行文件；日志写在本模块目录的 service.log（只有时间和做了什么），最多 200 行。
-# 卸载模块时 uninstall.sh 把 1、2、3 还原成 prior.txt 里记的原值；4 本来就只在进程活着时有效。
+#      这个设置系统会存盘，重启后还在；卸载时还原成改之前的分组
+# 下面几条只看不改：
+#   4. TT 被 Android 或 ColorOS 冻结 / 解冻时记一行（含冻了多久、当时是否在生成回复）
+#   5. TT 进程没了时，把系统记的退出原因（ApplicationExitInfo）翻成人话记一行
+#   6. TT 正在生成回复（它自己开着前台服务）时被冻结或进程没了：发一条通知
+# 不再调 /proc/<pid>/oom_score_adj（1.2 及以前做过）：系统决定冻结和查杀都不看它，还会被改回去。
+# 生成回复时 TT 2.3.0 自己开前台服务，系统优先级约 200，本来就不会被 Android 冻结；空闲时被冻结是正常省电。
+# 不联网、不下载、不含可执行文件；日志写在本模块目录的 service.log，最多 200 行。
 
-PKG=com.tauritavern.client
-MODDIR=${0%/*}
-LOG=$MODDIR/service.log
-OOM_BG=250
+MODDIR=${TT_MODDIR:-${0%/*}}
+. "$MODDIR/common.sh"
+
 FAST=15      # TT 在运行时的检查间隔（秒）
 SLOW=60      # TT 没在运行时
 CHECK=600    # 白名单 / 后台运行 / 待机分组的核对间隔
 
-log() {
-    echo "$(date '+%m-%d %H:%M:%S') $*" >> "$LOG"
-    # 超过 240 行就只留最近 200 行
-    if [ "$(wc -l < "$LOG" 2>/dev/null)" -gt 240 ] 2>/dev/null; then
-        tail -n 200 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
-    fi
-}
-
-PRIOR=$MODDIR/prior.txt
-
-# 等开机完成
-until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 5; done
-sleep 20
-
-appop_mode() {   # 输出 allow / ignore / deny / default …
-    m=$(cmd appops get "$PKG" "$1" 2>/dev/null | sed -n "s/^$1: \([a-z_]*\).*/\1/p" | head -1)
-    echo "${m:-default}"
-}
-
 # 第一次运行（装上后第一次开机）：记下改之前的原值，卸载时还原成它
 record_prior() {
     [ -f "$PRIOR" ] && return
-    if dumpsys deviceidle whitelist 2>/dev/null | grep -q ",$PKG,"; then wl=yes; else wl=no; fi
+    if in_whitelist; then wl=yes; else wl=no; fi
     {
         echo "# $(date '+%Y-%m-%d %H:%M:%S') 模块第一次运行前的原值（卸载时还原成这些）"
         echo "whitelist=$wl"
@@ -64,10 +43,10 @@ ensure() {
     fi
     installed=yes
     record_prior
-    if ! dumpsys deviceidle whitelist 2>/dev/null | grep -q ",$PKG,"; then
+    if ! in_whitelist; then
         dumpsys deviceidle whitelist +"$PKG" >/dev/null 2>&1 && log "已加入电池优化白名单"
     fi
-    if ! cmd appops get "$PKG" RUN_ANY_IN_BACKGROUND 2>/dev/null | grep -q allow; then
+    if [ "$(appop_mode RUN_ANY_IN_BACKGROUND)" != allow ]; then
         cmd appops set "$PKG" RUN_IN_BACKGROUND allow >/dev/null 2>&1
         cmd appops set "$PKG" RUN_ANY_IN_BACKGROUND allow >/dev/null 2>&1 && log "已允许后台运行"
     fi
@@ -76,54 +55,104 @@ ensure() {
         if [ "$b" -gt 10 ]; then
             grep -q '^bucket=' "$PRIOR" 2>/dev/null || echo "bucket=$b" >> "$PRIOR"
             am set-standby-bucket "$PKG" active >/dev/null 2>&1
-            am set-inactive "$PKG" false >/dev/null 2>&1
             log "待机分组 $b → 10（活跃）"
         fi ;;
     esac
-    uid=$(stat -c %u "/data/data/$PKG" 2>/dev/null)
+    uid=$(app_uid)
     return 0
 }
 
-# 冻结状态：Android 的冻结器（cgroup v2：apps/uid_*/pid_*/cgroup.events 里 frozen 1）
-# 或 ColorOS 自己的（cgroup v1：/dev/freezer/frozen/cgroup.procs 里有这个进程）
-frozen_by() {
-    ev=/sys/fs/cgroup/apps/uid_$uid/pid_$1/cgroup.events
-    [ -n "$uid" ] && [ -r "$ev" ] && grep -q '^frozen 1' "$ev" && { echo Android; return; }
-    [ -r /dev/freezer/frozen/cgroup.procs ] && grep -qx "$1" /dev/freezer/frozen/cgroup.procs && { echo ColorOS; return; }
+# 记下新的退出记录；生成回复到一半进程没了就发通知
+report_exits() {
+    died_in_gen=""
+    if [ "$gen_prev" = 1 ]; then
+        for p in $prev_pids; do
+            case " $pids " in *" $p "*) ;; *) died_in_gen=$p ;; esac
+        done
+    fi
+    new_exits | while IFS= read -r rec; do
+        [ -n "$rec" ] || continue
+        log "$(exit_line "$rec")"
+        echo "$rec"
+    done > "$STATE.exits"
+    newest=$(tail -n 1 "$STATE.exits" 2>/dev/null | cut -d'|' -f1)
+    [ -n "$newest" ] && state_set last_exit "$newest"
+    if [ -n "$died_in_gen" ]; then
+        rec=$(grep "^[^|]*|$died_in_gen|" "$STATE.exits" | tail -n 1)
+        if [ -n "$rec" ]; then
+            why=$(exit_reason_zh "$(echo "$rec" | cut -d'|' -f3)" "$(echo "$rec" | cut -d'|' -f4)")
+        else
+            why="系统没记原因"
+            log "TT（$died_in_gen）生成回复时进程没了，系统没记原因"
+        fi
+        notify "TT 生成回复到一半进程没了" "原因：$why。Claude Max 代理会暂存回复，重开 TT 后会补回。"
+    fi
+    rm -f "$STATE.exits"
 }
 
-installed=""
-last_check=0
-last_pid=""
-frozen_since=""
-while true; do
+tick() {
     now=$(date +%s)
     if [ $((now - last_check)) -ge $CHECK ]; then
         ensure
         last_check=$now
     fi
 
-    pids=$(pidof "$PKG")
+    pids=$(pidof "$PKG" 2>/dev/null)
+    gen=0
+    [ -n "$pids" ] && generating && gen=1
+    [ "$gen" = 1 ] && [ "$gen_prev" != 1 ] && gen_alerted=""
+
+    if [ "$pids" != "$prev_pids" ] || [ $((now - last_exit_scan)) -ge $CHECK ]; then
+        report_exits
+        last_exit_scan=$now
+    fi
+
     for pid in $pids; do
-        f=/proc/$pid/oom_score_adj
-        [ -w "$f" ] || continue
-        cur=$(cat "$f" 2>/dev/null)
-        case "$cur" in ''|*[!0-9-]*) continue ;; esac
-        if [ "$cur" -gt "$OOM_BG" ]; then
-            echo "$OOM_BG" > "$f" 2>/dev/null
-            [ "$pid" != "$last_pid" ] && log "TT（$pid）在后台：回收优先级 $cur → $OOM_BG"
-            last_pid=$pid
-        fi
-        by=$(frozen_by "$pid")
+        by=$(frozen_by "$pid" "$uid")
         if [ -n "$by" ] && [ -z "$frozen_since" ]; then
             frozen_since=$now
-            log "TT（$pid）被 $by 冻结了"
+            if [ "$gen" = 1 ]; then
+                log "TT（$pid）被 $by 冻结了（正在生成回复）"
+                if [ -z "$gen_alerted" ]; then
+                    notify "TT 生成回复时被 $by 冻结了" "回复可能停住。点开 TT 就会解冻；Claude Max 代理会暂存回复。"
+                    gen_alerted=1
+                fi
+            else
+                log "TT（$pid）被 $by 冻结了"
+            fi
         elif [ -z "$by" ] && [ -n "$frozen_since" ]; then
-            log "TT（$pid）解冻，冻了 $((now - frozen_since)) 秒"
+            log "TT（$pid）解冻，冻了约 $((now - frozen_since)) 秒"
             frozen_since=""
         fi
     done
     [ -z "$pids" ] && frozen_since=""
 
-    if [ -n "$pids" ]; then sleep $FAST; else sleep $SLOW; fi
-done
+    gen_prev=$gen
+    prev_pids=$pids
+}
+
+main() {
+    # 等开机完成
+    until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 5; done
+    sleep 20
+    # 第一次运行：系统里已有的退出记录不算新的
+    if [ -z "$(state_get last_exit)" ]; then
+        first=$(exit_records | head -n 1 | cut -d'|' -f1)
+        state_set last_exit "${first:-0}"
+    fi
+    log "开始运行（版本 $(sed -n 's/^version=//p' "$MODDIR/module.prop")）"
+    while true; do
+        tick
+        if [ -n "$pids" ]; then sleep $FAST; else sleep $SLOW; fi
+    done
+}
+
+installed=""
+uid=""
+last_check=0
+last_exit_scan=0
+prev_pids=""
+gen_prev=0
+gen_alerted=""
+frozen_since=""
+[ "${TT_KEEPALIVE_TEST:-}" = 1 ] || main

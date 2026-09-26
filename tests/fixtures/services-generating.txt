@@ -1,0 +1,6 @@
+ACTIVITY MANAGER SERVICES (dumpsys activity services)
+  User 0 active services:
+  * ServiceRecord{4f1a2b3 u0 com.tauritavern.client/.AiGenerationForegroundService c:com.tauritavern.client}
+    intent={act=com.tauritavern.client.action.START_GENERATION cmp=com.tauritavern.client/.AiGenerationForegroundService}
+    packageName=com.tauritavern.client
+    isForeground=true foregroundId=42000 types=0x00000001
