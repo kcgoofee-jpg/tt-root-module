@@ -56,6 +56,11 @@ check "记了日志" 'grep -q "已拷到电脑并核对" "$DEST/pull.log"'
 run
 check "再跑一次：已经是最新的" 'grep -q 已经是最新的 "$T/out"'
 
+print "[电脑] 旧版本的备份没有 .sha256"
+n=tt-default-user-$(day 2)-090000.tar.gz; print -r -- old | gzip > "$PRIVATE_BK/$n"
+run
+check "手机端补上校验文件，电脑照常拷走并核对" '[[ -s $PRIVATE_BK/$n.sha256 && -f $DEST/$n ]] && ( cd "$DEST" && shasum -a 256 -c "$n.sha256" ) >/dev/null'
+
 print "[电脑] 防呆"
 rm -f "$DEST/tt-default-user-$(day 1)-080000.tar.gz"
 run
@@ -84,7 +89,7 @@ run
 check "两年前的删了" '[[ ! -f "$DEST/tt-default-user-$(day 1000)-100000.tar.gz" ]]'
 check "同一周多出来的删了" '[[ ! -f "$DEST/tt-default-user-$(day 20)-090000.tar.gz" && -f "$DEST/tt-default-user-$(day 20)-100000.tar.gz" ]]'
 check "一年多以前的（24 个月内）留着" '[[ -f "$DEST/tt-default-user-$(day 400)-100000.tar.gz" ]]'
-check "手机上的备份一份没少" '[[ $(ls "$PRIVATE_BK" | grep -c "\.tar\.gz$") == 4 ]]'
+check "手机上的备份一份没少" '[[ $(ls "$PRIVATE_BK" | grep -c "\.tar\.gz$") == 5 ]]'
 
 print "[电脑] 太久没同步"
 print $(( $(date +%s) - 5 * 86400 )) > "$DEST/.last-sync"; rm -f "$DEST/.last-alert-day"

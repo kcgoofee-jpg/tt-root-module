@@ -214,6 +214,8 @@ case "${1:-}" in
     list-backups)
         d=$(bdir)
         list_backups | while IFS= read -r n; do
+            # 旧版本留下的备份可能没有 .sha256：补上，否则电脑端会一直跳过它
+            [ -s "$d/$n.sha256" ] || { sha_line "$d" "$n" > "$d/$n.sha256" && fix_bk_perms "$d"; }
             echo "$n $(du -k "$d/$n" 2>/dev/null | cut -f1) $(cut -d' ' -f1 "$d/$n.sha256" 2>/dev/null)"
         done ;;
     mark-pulled)

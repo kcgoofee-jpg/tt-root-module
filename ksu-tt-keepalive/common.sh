@@ -501,6 +501,10 @@ backup_now() {
 check_backups() {
     d=$(bdir)
     rm -f "$d"/.*.part "$d"/.*.part.list 2>/dev/null
+    # 旧版本留下的、没有 .sha256 的备份：补上（完整读一遍 gzip 确认没坏才补）
+    for n in $(list_backups); do
+        [ -s "$d/$n.sha256" ] || { gzip -t "$d/$n" 2>/dev/null && sha_line "$d" "$n" > "$d/$n.sha256"; }
+    done
     for cb_ in $TARGETS; do
         n=$(list_backups "$cb_" | head -n 1)
         [ -n "$n" ] && [ -s "$d/$n.sha256" ] || continue
