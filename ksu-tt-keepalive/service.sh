@@ -52,6 +52,7 @@ ensure() {
     if ! pm path "$PKG" >/dev/null 2>&1; then
         [ "$installed" != "no" ] && log "没装 $PKG，先不做，装上后自动生效"
         installed=no
+        for t in sillydroid termux; do t_present "$t" && keep_other "$(t_pkg "$t")"; done
         return 1
     fi
     installed=yes
@@ -84,6 +85,7 @@ ensure() {
     old_w=$(state_get webview)
     [ -n "$old_w" ] && [ -n "$w" ] && [ "$old_w" != "$w" ] && log "系统浏览器内核（WebView）更新：$old_w → $w"
     [ -n "$w" ] && [ "$w" != "$old_w" ] && state_set webview "$w"
+    for t in sillydroid termux; do t_present "$t" && keep_other "$(t_pkg "$t")"; done
     return 0
 }
 
@@ -129,7 +131,7 @@ report_exits() {
         fi
         extra="重新打开后可补回暂存的回复。"
         if { system_kill "$r" "${sr:-}" || [ "$r" = unknown ]; } && [ "$(cfg auto_reopen 1)" = 1 ] \
-            && [ ! -d "$MODDIR/.restore.lock" ] \
+            && [ ! -d "$GDIR/.restore.lock" ] \
             && [ $((now - last_reopen)) -ge $REOPEN_GAP ]; then
             if am start -n "$PKG/.MainActivity" >/dev/null 2>&1; then
                 last_reopen=$now
@@ -160,53 +162,62 @@ check_quota() {
     alert "今日生成时长已达 $(human_secs "$secs")" "系统限制后台生成每 24 小时约 6 小时，超出后请在前台使用。"
 }
 
-# 备份：TT 数据有变化、离上次够 backup_hours 小时、没在生成、手机解锁过，才备份；失败 1 小时后再试
+# 备份：每个检测到的酒馆分开判断——数据有变化、离上次够 backup_hours 小时、手机解锁过；
+# TT 还要不在生成回复。失败 1 小时后再试
 maybe_backup() {
-    [ "$(cfg backup 1)" = 1 ] || return
-    [ "$installed" = yes ] && [ "$gen" = 0 ] && unlocked || return
+    [ "$(cfg backup 1)" = 1 ] && unlocked || return
     hrs=$(cfg backup_hours 6); [ "$hrs" -ge 1 ] 2>/dev/null || hrs=6
-    lb=$(state_get last_backup); lb=${lb:-0}
-    chk=$(state_get last_backup_check); chk=${chk:-0}
-    tried=$(state_get backup_try); tried=${tried:-0}
-    [ $((now - lb)) -ge $((hrs * 3600)) ] && [ $((now - chk)) -ge $((hrs * 3600)) ] \
-        && [ $((now - tried)) -ge 3600 ] || return
-    if ! space_ok; then
-        if [ "$(state_get space_day)" != "$day" ]; then
-            state_set space_day "$day"
-            log "存储空间不足，暂停自动备份（剩 $(human_kb "$(free_kb "$(bdir)")")）"
-            alert "存储空间不足，已暂停备份" "剩余 $(human_kb "$(free_kb "$(bdir)")")。清理空间后自动恢复。"
+    for tg in $(present_targets); do
+        [ "$tg" = tt ] && { [ "$installed" = yes ] && [ "$gen" = 0 ] || continue; }
+        lb=$(state_get "$(t_key "$tg" last_backup)"); lb=${lb:-0}
+        chk=$(state_get "$(t_key "$tg" last_backup_check)"); chk=${chk:-0}
+        tried=$(state_get "$(t_key "$tg" backup_try)"); tried=${tried:-0}
+        [ $((now - lb)) -ge $((hrs * 3600)) ] && [ $((now - chk)) -ge $((hrs * 3600)) ] \
+            && [ $((now - tried)) -ge 3600 ] || continue
+        if ! space_ok "$tg"; then
+            if [ "$(state_get space_day)" != "$day" ]; then
+                state_set space_day "$day"
+                log "存储空间不足，暂停自动备份（剩 $(human_kb "$(free_kb "$(bdir)")")）"
+                alert "存储空间不足，已暂停备份" "剩余 $(human_kb "$(free_kb "$(bdir)")")。清理空间后自动恢复。"
+            fi
+            return
         fi
-        return
-    fi
-    if ! data_changed; then
-        state_set last_backup_check "$now"     # 数据没变，现有的备份就是最新的
-        return
-    fi
-    state_set backup_try "$now"
-    if bf=$(backup_now); then
-        state_set last_backup "$now"; state_set last_backup_check "$now"; state_set backup_fails 0
-        kb=$(du -k "$bf" 2>/dev/null | cut -f1)
-        dropped=$(apply_retention | wc -l | tr -d ' ')
-        prune_prerestore >/dev/null
-        extra=""; [ "$dropped" -gt 0 ] 2>/dev/null && extra="；按分层保留清掉 $dropped 份旧的"
-        log "已备份并校验 TT 数据：${bf##*/}（$kb KB，不含 API 密钥）$extra"
-    else
-        fails=$(( $(state_get backup_fails) + 1 )); state_set backup_fails "$fails"
-        log "备份 TT 数据失败（连续第 $fails 次），1 小时后再试"
-        [ "$fails" = 3 ] && alert "备份连续失败 3 次" "请在 KernelSU 中打开 TT 守护查看详情。"
-    fi
+        if ! data_changed "$tg"; then
+            state_set "$(t_key "$tg" last_backup_check)" "$now"     # 数据没变，现有的备份就是最新的
+            continue
+        fi
+        state_set "$(t_key "$tg" backup_try)" "$now"
+        if bf=$(backup_now "$tg"); then
+            state_set "$(t_key "$tg" last_backup)" "$now"; state_set "$(t_key "$tg" last_backup_check)" "$now"
+            state_set "$(t_key "$tg" backup_fails)" 0
+            kb=$(du -k "$bf" 2>/dev/null | cut -f1)
+            dropped=$(apply_retention | wc -l | tr -d ' ')
+            prune_prerestore >/dev/null
+            extra=""; [ "$dropped" -gt 0 ] 2>/dev/null && extra="；按分层保留清掉 $dropped 份旧的"
+            log "已备份并校验 $(t_label "$tg") 数据：${bf##*/}（$kb KB，不含 API 密钥）$extra"
+        else
+            fk=$(t_key "$tg" backup_fails)
+            fails=$(( $(state_get "$fk") + 1 )); state_set "$fk" "$fails"
+            log "备份 $(t_label "$tg") 数据失败（连续第 $fails 次），1 小时后再试"
+            [ "$fails" = 3 ] && alert "$(t_label "$tg") 备份连续失败 3 次" "请在 KernelSU 中打开 TT 守护查看详情。"
+        fi
+    done
 }
 
-# 备份太久没成功、太久没拷到电脑：每天最多各提醒一次
+# 备份太久没成功（每个酒馆分开）、太久没拷到电脑：每天最多各提醒一次
 check_stale() {
-    [ "$(cfg backup 1)" = 1 ] && [ "$installed" = yes ] && unlocked || return
+    [ "$(cfg backup 1)" = 1 ] && unlocked || return
     since=$(state_get watch_since); since=${since:-$now}
-    ok=$(state_get last_backup_check); ok=${ok:-$since}
-    if [ $((now - ok)) -ge 172800 ] && [ "$(state_get stale_day)" != "$day" ]; then
-        state_set stale_day "$day"
-        log "已经 $(( (now - ok) / 86400 )) 天没备份成功了"
-        alert "$(( (now - ok) / 86400 )) 天未备份" "请在 KernelSU 中打开 TT 守护查看详情。"
-    fi
+    for tg in $(present_targets); do
+        [ "$tg" = tt ] && [ "$installed" != yes ] && continue
+        ok=$(state_get "$(t_key "$tg" last_backup_check)"); ok=${ok:-$since}
+        sd=$(t_key "$tg" stale_day)
+        if [ $((now - ok)) -ge 172800 ] && [ "$(state_get "$sd")" != "$day" ]; then
+            state_set "$sd" "$day"
+            log "$(t_label "$tg") 已经 $(( (now - ok) / 86400 )) 天没备份成功了"
+            alert "$(t_label "$tg") $(( (now - ok) / 86400 )) 天未备份" "请在 KernelSU 中打开 TT 守护查看详情。"
+        fi
+    done
     md=$(cfg mac_alert_days 3)
     [ "$md" -gt 0 ] 2>/dev/null && [ -n "$(list_backups | head -n 1)" ] || return
     mp=$(state_get mac_pulled); mp=${mp:-$since}
@@ -214,6 +225,28 @@ check_stale() {
         state_set macstale_day "$day"
         log "已经 $(( (now - mp) / 86400 )) 天没把备份拷到电脑"
         alert "$(( (now - mp) / 86400 )) 天未同步到电脑" "备份仅存于本机。连接电脑后将自动同步。"
+    fi
+}
+
+# SillyDroid、Termux 里的 SillyTavern 是常驻的 node 服务，确实需要保活：检测到才设，
+# 改之前把原值记在 prior.txt（键名前加包名），卸载时还原
+keep_other() {
+    pkg=$1
+    pm path "$pkg" >/dev/null 2>&1 || return
+    if ! grep -q "^$pkg\\.whitelist=" "$PRIOR" 2>/dev/null; then
+        if dumpsys deviceidle whitelist 2>/dev/null | grep -q ",$pkg,"; then w=yes; else w=no; fi
+        {
+            echo "$pkg.whitelist=$w"
+            echo "$pkg.RUN_IN_BACKGROUND=$(appop_mode RUN_IN_BACKGROUND "$pkg")"
+            echo "$pkg.RUN_ANY_IN_BACKGROUND=$(appop_mode RUN_ANY_IN_BACKGROUND "$pkg")"
+        } >> "$PRIOR"
+        log "记下 $pkg 的原值：白名单 $w"
+    fi
+    dumpsys deviceidle whitelist 2>/dev/null | grep -q ",$pkg," \
+        || { dumpsys deviceidle whitelist +"$pkg" >/dev/null 2>&1 && log "已把 $pkg 加入电池优化白名单"; }
+    if [ "$(appop_mode RUN_ANY_IN_BACKGROUND "$pkg")" != allow ]; then
+        cmd appops set "$pkg" RUN_IN_BACKGROUND allow >/dev/null 2>&1
+        cmd appops set "$pkg" RUN_ANY_IN_BACKGROUND allow >/dev/null 2>&1 && log "已允许 $pkg 后台运行"
     fi
 }
 
@@ -239,6 +272,11 @@ check_temp() {
 
 tick() {
     now=$(date +%s)
+    if module_disabled; then
+        [ -n "$disabled_logged" ] || { log "模块已在管理器中禁用：暂停所有操作，重启后生效"; disabled_logged=1; }
+        pids=""; idle_frozen=""; return
+    fi
+    disabled_logged=""
     if [ $((now - last_check)) -ge $CHECK ]; then
         ensure
         last_check=$now
@@ -324,6 +362,7 @@ main() {
         first=$(exit_records | head -n 1 | cut -d'|' -f1)
         state_set last_exit "${first:-0}"
     fi
+    migrate_data
     config_fill
     [ -n "$(state_get watch_since)" ] || state_set watch_since "$(date +%s)"
     log "开始运行（版本 $(sed -n 's/^version=//p' "$MODDIR/module.prop")）"
@@ -347,4 +386,5 @@ frozen_since=""
 last_reopen=0
 last_day=""
 migrated=""
+disabled_logged=""
 [ "${TT_KEEPALIVE_TEST:-}" = 1 ] || main

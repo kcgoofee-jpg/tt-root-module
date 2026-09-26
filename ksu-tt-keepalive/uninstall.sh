@@ -2,7 +2,7 @@
 # 卸载模块时把 service.sh 改过的设置还原成装模块之前的值（记在 prior.txt；没记的按 Android 默认）。
 # KernelSU / Magisk 在开机早期（系统服务还没起来）运行这个脚本、随后删掉模块目录：
 # 所以先把 prior.txt 读进变量，再在后台等开机完成后才执行 dumpsys / cmd / am。
-# 模块只改过这三样（白名单、后台运行、待机分组），其余都是只读；日志、状态、统计、开关随模块目录一起删掉。
+# 模块只改过这三样（白名单、后台运行、待机分组），其余都是只读；日志、状态、统计、设置（/data/adb/tt-guard）一起删掉。
 # 备份是你的数据，卸载时不删：放在私密位置（/data/adb/tt-backups）的，等手机解锁后搬到
 # 「内部存储/Documents/TauriTavern-backup」，免得留在一个看不到的地方；不要了可以自己删。
 PKG=com.tauritavern.client
@@ -10,7 +10,9 @@ MODDIR=${TT_MODDIR:-${0%/*}}
 DELAY=${UNINSTALL_DELAY:-10}
 PRIVATE_BK=${PRIVATE_BK:-/data/adb/tt-backups}
 SHARED_BK=${SHARED_BK:-/data/media/0/Documents/TauriTavern-backup}
-get() { sed -n "s/^$1=//p" "$MODDIR/prior.txt" 2>/dev/null | head -1; }
+GDIR=${TT_GUARD_DIR:-/data/adb/tt-guard}
+P=$GDIR/prior.txt; [ -f "$P" ] || P=$MODDIR/prior.txt   # 1.6 以前放在模块目录
+get() { sed -n "s/^$1=//p" "$P" 2>/dev/null | head -1; }
 WL=$(get whitelist)
 RIB=$(get RUN_IN_BACKGROUND)
 RAIB=$(get RUN_ANY_IN_BACKGROUND)
@@ -29,14 +31,23 @@ BUCKET=$(get bucket)
         40) am set-standby-bucket "$PKG" rare >/dev/null 2>&1 ;;
         45) am set-standby-bucket "$PKG" restricted >/dev/null 2>&1 ;;
     esac
+    # SillyDroid、Termux：模块检测到它们时设过保活，按记下的原值还原
+    for pkg in com.jm.sillydroid com.termux; do
+        w=$(get "$pkg.whitelist"); [ -n "$w" ] || continue
+        [ "$w" = yes ] || dumpsys deviceidle whitelist -"$pkg" >/dev/null 2>&1
+        cmd appops set "$pkg" RUN_IN_BACKGROUND "$(get "$pkg.RUN_IN_BACKGROUND")" >/dev/null 2>&1
+        cmd appops set "$pkg" RUN_ANY_IN_BACKGROUND "$(get "$pkg.RUN_ANY_IN_BACKGROUND")" >/dev/null 2>&1
+    done
     # 私密位置的备份搬到共享位置（要等手机解锁：内部存储在解锁前是加密的）
-    if ls "$PRIVATE_BK"/tt-default-user-* >/dev/null 2>&1; then
+    if ls "$PRIVATE_BK"/*.tar.gz >/dev/null 2>&1; then
         until [ "$(getprop sys.user.0.ce_available)" = true ]; do sleep 10; done
-        mkdir -p "$SHARED_BK" && for f in "$PRIVATE_BK"/tt-default-user-*; do mv "$f" "$SHARED_BK/"; done
-        chown -R 1023:1023 "$SHARED_BK"; chmod 775 "$SHARED_BK"; chmod 664 "$SHARED_BK"/tt-default-user-*
+        mkdir -p "$SHARED_BK" && for f in "$PRIVATE_BK"/*; do [ -f "$f" ] && mv "$f" "$SHARED_BK/"; done
+        chown -R 1023:1023 "$SHARED_BK"; chmod 775 "$SHARED_BK"; find "$SHARED_BK" -maxdepth 1 -type f -exec chmod 664 {} +
         command -v chcon >/dev/null && chcon -R u:object_r:media_rw_data_file:s0 "$SHARED_BK"
         rmdir "$PRIVATE_BK"
         su 2000 -c "cmd notification post -S bigtext -t 'TT 守护已卸载' claudemax_tt_keepalive '备份已移至 内部存储/Documents/TauriTavern-backup'"
     fi
+    # 模块自己的日志、状态、统计、设置（不含备份）一起删掉
+    rm -rf "${GDIR:?}"
     # 模块发过的通知撤掉不了（Android 没这个命令），留着的可以手动划掉
 ) </dev/null >/dev/null 2>&1 &

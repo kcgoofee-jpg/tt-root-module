@@ -58,8 +58,12 @@ if [ "$(cfg backup 1)" = 1 ]; then
     echo "最近一次备份：$(ago "$lb")；最近确认数据没变：$(ago "$ck")；最近拷到电脑：$(ago "$mp")"
     echo "有变化时最多每 $(cfg backup_hours 6) 小时一次；保留 $(cfg keep_days 7) 天 / $(cfg keep_weeks 4) 周 / $(cfg keep_months 6) 个月"
     echo "位置：$(bdir)（$([ "$(cfg backup_private 1)" = 0 ] && echo "文件管理器能看到" || echo "只有 root 能读")，不含 API 密钥）"
+    for tg in $TARGETS; do
+        if t_present "$tg"; then echo "$(t_label "$tg")：已检测到，$(list_backups "$tg" | wc -l | tr -d ' ') 份备份"
+        elif pm path "$(t_pkg "$tg")" >/dev/null 2>&1; then echo "$(t_label "$tg")：已安装，未检测到数据"; fi
+    done
     backup_tiers | while read -r tier n; do
-        case "$tier" in new) t=最新 ;; 2d) t=近两天 ;; day) t=每天 ;; week) t=每周 ;; month) t=每月 ;; *) t=多余 ;; esac
+        case "$tier" in new) t=最新 ;; 2d) t=近两天 ;; day) t=每天 ;; week) t=每周 ;; month) t=每月 ;; pre) t=恢复前 ;; *) t=多余 ;; esac
         v=""; [ -s "$(bdir)/$n.sha256" ] && v="，已校验"
         echo "  $n（$t，$(human_kb "$(du -k "$(bdir)/$n" 2>/dev/null | cut -f1)")$v）"
     done

@@ -60,7 +60,7 @@ DAY0=86400   # 1970-01-02 00:00 UTC，按天算的用例从这里开始
 
 newmod() {   # 新建一个空的模块目录（放进脚本），设好环境
     D=$T/mod$1; rm -rf "$D"; mkdir -p "$D"; cp "$MOD"/*.sh "$MOD"/*.awk "$MOD/module.prop" "$D/"
-    export TT_MODDIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1 TT_DATA=$T/data$1 PRIVATE_BK=$T/backup$1 SHARED_BK=$T/shared$1 \
+    export TT_MODDIR=$D TT_GUARD_DIR=$D CG_ROOT=$T/cg$1 OPLUS_FROZEN=$T/oplus$1 TT_DATA=$T/data$1 PRIVATE_BK=$T/backup$1 SHARED_BK=$T/shared$1 \
            TT_LOGS=$T/ttlogs$1 ANR_DIR=$T/anr$1 BATTERY_TEMP=$T/temp$1
     : > "$CALLS"
     BACKUP_DIR=$PRIVATE_BK   # 默认 backup_private=1
@@ -312,7 +312,7 @@ newmod 27; ( load
     echo e > "$TT_DATA/extensions/third-party/x/index.js"; echo a > "$TT_DATA/_cm_archive/a.json"; echo c > "$TT_DATA/_cache/c"; echo m > "$TT_DATA/_tauritavern/mcp/r.json"
     FAKE_CE=false FAKE_PIDS=9 FAKE_GEN=0 FAKE_NOW=$((DAY0 - 100)); tick
     check "开机后没解锁不备份" '[ -z "$(bk)" ]'
-    check "没解锁不算失败" '! grep -q "备份 TT 数据失败" "$LOG" 2>/dev/null && [ -z "$(state_get backup_try)" ]'
+    check "没解锁不算失败" '! grep -q "备份 TauriTavern 数据失败" "$LOG" 2>/dev/null && [ -z "$(state_get backup_try)" ]'
     FAKE_CE=true
     FAKE_PIDS=9 FAKE_GEN=1 FAKE_NOW=$DAY0; tick
     check "生成中不备份" '[ -z "$(bk)" ]'
@@ -328,7 +328,7 @@ newmod 27; ( load
     check "没有 TT 自己的备份和缩略图" '! echo "$list" | grep -qE "default-user/(backups|thumbnails|\.staging)/"'
     check "没留半截文件和锁" '[ -z "$(ls -a "$BACKUP_DIR" | grep part)" ] && [ ! -d "$TT_MODDIR/.backup.lock" ]'
     check "写了 sha256 且对得上" '( cd "$BACKUP_DIR" && { sha256sum -c "${f##*/}.sha256" || shasum -a 256 -c "${f##*/}.sha256"; } ) >/dev/null 2>&1'
-    check "记日志（已校验、文件名和大小）" 'grep -q "已备份并校验 TT 数据：tt-default-user-19700102-000015.tar.gz（[0-9][0-9]* KB" "$LOG"'
+    check "记日志（已校验、文件名和大小）" 'grep -q "已备份并校验 TauriTavern 数据：tt-default-user-19700102-000015.tar.gz（[0-9][0-9]* KB" "$LOG"'
     FAKE_NOW=$((DAY0 + 3600)); tick
     check "6 小时内不再备份" '[ "$(bk | wc -l | tr -d " ")" = 1 ]'
     FAKE_NOW=$((DAY0 + 7 * 3600)); tick
@@ -345,13 +345,15 @@ newmod 27; ( load
     )
 newmod 28; ( load
     FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"
+    mkdir -p "$T/ro28"; chmod 555 "$T/ro28"; PRIVATE_BK=$T/ro28/bk   # 备份目录建不出来：模拟写入失败
     FAKE_PIDS="" FAKE_NOW=$DAY0; tick
-    check "没有数据时记失败" 'grep -q "备份 TT 数据失败（连续第 1 次），1 小时后再试" "$LOG"'
+    check "没有数据时记失败" 'grep -q "备份 TauriTavern 数据失败（连续第 1 次），1 小时后再试" "$LOG"'
     FAKE_NOW=$((DAY0 + 600)); tick
-    check "1 小时内不重试" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 1 ]'
+    check "1 小时内不重试" '[ "$(grep -c "备份 TauriTavern 数据失败" "$LOG")" = 1 ]'
     FAKE_NOW=$((DAY0 + 3700)); tick; FAKE_NOW=$((DAY0 + 7400)); tick
-    check "连续失败 3 次发通知" '[ "$(grep -c "备份 TT 数据失败" "$LOG")" = 3 ] && calls | grep -q "^cmd notification.*备份连续失败 3 次"'
-    mkdir -p "$TT_DATA/default-user"; echo x > "$TT_DATA/default-user/a"; FAKE_NOW=$((DAY0 + 11100)); tick
+    check "连续失败 3 次发通知" '[ "$(grep -c "备份 TauriTavern 数据失败" "$LOG")" = 3 ] && calls | grep -q "^cmd notification.*TauriTavern 备份连续失败 3 次"'
+    PRIVATE_BK=$T/backup28; FAKE_NOW=$((DAY0 + 11100)); tick
     check "成功后失败次数清零" '[ "$(state_get backup_fails)" = 0 ]'
     )
 
@@ -481,7 +483,7 @@ echo "旧聊天" > "$U/chats/A/1.jsonl"; echo "sk-KEY" > "$U/secrets.json"; echo
 echo "新扩展" > "$TT_DATA/extensions/e/i.js"
 echo "新聊天" > "$U/chats/A/1.jsonl"; echo "之后新建" > "$U/chats/A/2.jsonl"
 FAKE_PIDS=123 sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
-check "TT 在运行不恢复" '[ $r = 3 ] && grep -q "先在最近任务里把 TT 划掉" "$T/r.out" && grep -qx "新聊天" "$U/chats/A/1.jsonl"'
+check "TT 在运行不恢复" '[ $r = 3 ] && grep -q "请先在最近任务中关闭 TauriTavern" "$T/r.out" && grep -qx "新聊天" "$U/chats/A/1.jsonl"'
 FAKE_CE=false sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > /dev/null; r=$?
 check "没解锁不恢复" '[ $r = 4 ]'
 sh "$TT_MODDIR/restore.sh" ../../etc/passwd > /dev/null; r=$?
@@ -502,7 +504,7 @@ check "恢复前先备份了现在的（单独命名）" '[ -f "$BACKUP_DIR/tt-d
 check "恢复前的备份不含密钥" '! tar -tzf "$BACKUP_DIR/tt-default-user-19700101-012320-prerestore.tar.gz" | grep -q secrets'
 check "属主改回 TT" 'calls | grep -q "^chown -R 10447:10447 $U"'
 check "临时目录删了" '[ ! -e "$TT_DATA/.cc-restore" ]'
-check "记日志" 'grep -q "从备份恢复了 TT 数据：tt-default-user-19700101-000000.tar.gz" "$TT_MODDIR/service.log"'
+check "记日志" 'grep -q "从备份恢复了 TauriTavern 数据：tt-default-user-19700101-000000.tar.gz" "$TT_MODDIR/service.log"'
 
 echo "[1.6] 界面用的 ui.sh"
 newmod 36
@@ -516,7 +518,7 @@ if command -v python3 >/dev/null 2>&1; then
 else
     check "status 是 { 开头 } 结尾" 'case "$out" in "{"*"}") true ;; *) false ;; esac'
 fi
-check "status 里有备份位置" 'echo "$out" | grep -q "\"dir\":\"$PRIVATE_BK\""'
+check "status 里有备份位置" 'printf "%s" "$out" | grep -q "dir.:.$PRIVATE_BK"'
 r=$(sh "$TT_MODDIR/ui.sh" backup)
 check "ui backup 成功" 'echo "$r" | grep -q "\"ok\":true" && [ -n "$(ls "$BACKUP_DIR" | grep "\.tar\.gz$")" ]'
 out=$(sh "$TT_MODDIR/ui.sh" status)
@@ -529,7 +531,7 @@ check "ui set 改位置时搬备份" 'sh "$TT_MODDIR/ui.sh" set backup_private 0
 sh "$TT_MODDIR/ui.sh" set backup_private 1 >/dev/null
 check "ui mark-pulled" 'sh "$TT_MODDIR/ui.sh" mark-pulled >/dev/null; grep -q "^mac_pulled=" "$TT_MODDIR/state.txt"'
 r=$(FAKE_PIDS=5 sh "$TT_MODDIR/ui.sh" restore "$(ls "$BACKUP_DIR" | grep "\.tar\.gz$" | head -1)")
-check "ui restore：TT 在运行时 rc=3 并说明" 'echo "$r" | grep -q "\"rc\":3" && echo "$r" | grep -q "先在最近任务里把 TT 划掉"'
+check "ui restore：TT 在运行时 rc=3 并说明" 'echo "$r" | grep -q "\"rc\":3" && echo "$r" | grep -q "请先在最近任务中关闭 TauriTavern"'
 check "ui 不认识的命令" '! sh "$TT_MODDIR/ui.sh" rm-rf >/dev/null'
 
 echo "[1.6] 界面文件"
@@ -604,7 +606,7 @@ echo "[防呆] 恢复"
 newmod 43
 mkdir -p "$TT_DATA/default-user" "$BACKUP_DIR"; echo x > "$TT_DATA/default-user/a"
 ( cd "$TT_DATA" && tar -czf "$BACKUP_DIR/tt-default-user-19700101-000000.tar.gz" default-user )
-( cd "$BACKUP_DIR" && shasum -a 256 tt-default-user-19700101-000000.tar.gz > tt-default-user-19700101-000000.tar.gz.sha256 )
+( cd "$BACKUP_DIR" && { sha256sum tt-default-user-19700101-000000.tar.gz 2>/dev/null || shasum -a 256 tt-default-user-19700101-000000.tar.gz; } > tt-default-user-19700101-000000.tar.gz.sha256 )
 mkdir "$TT_MODDIR/.restore.lock"
 sh "$TT_MODDIR/restore.sh" tt-default-user-19700101-000000.tar.gz > "$T/r.out"; r=$?
 check "界面和电脑同时点恢复：第二个不跑" '[ $r = 7 ] && grep -q 另一个恢复正在进行 "$T/r.out"'
@@ -650,7 +652,7 @@ out=$(sh "$TT_MODDIR/ui.sh" selftest)
 if command -v python3 >/dev/null 2>&1; then
     check "自检是合法 JSON，10 项" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d)==10 and all(set(x)=={\"name\",\"ok\",\"detail\"} for x in d)"'
 fi
-check "自检：数据目录可读" 'printf "%s" "$out" | grep -q "\"name\":\"数据目录\",\"ok\":true"'
+check "自检：检测到酒馆数据" 'printf "%s" "$out" | grep -q "\"name\":\"酒馆数据\",\"ok\":true"'
 check "自检：还没有备份时报出来" 'printf "%s" "$out" | grep -q "\"name\":\"最新备份\",\"ok\":false"'
 export DIAG_DIR=$T/download
 r=$(sh "$TT_MODDIR/ui.sh" diag)
@@ -660,6 +662,67 @@ check "诊断包里有日志、自检、状态" 'tar -tzf "$f" | grep -q service
 check "诊断包里没有聊天数据" '! tar -tzf "$f" | grep -q chats && ! tar -xzOf "$f" 2>/dev/null | grep -q 秘密聊天'
 check "诊断用的临时目录删了" '[ ! -e "$TT_MODDIR/.diag" ]'
 unset DIAG_DIR
+
+echo "[多酒馆] SillyDroid 和 Termux 里的 SillyTavern"
+newmod 50
+export SD_ROOT=$T/sd/server TERMUX_ST=$T/termux/home/SillyTavern
+# SillyDroid：config data extensions plugins（数据在 data/default-user）
+mkdir -p "$SD_ROOT/config" "$SD_ROOT/data/default-user/chats" "$SD_ROOT/data/_cache" "$SD_ROOT/data/_webpack" "$SD_ROOT/extensions/x" "$SD_ROOT/plugins"
+echo y > "$SD_ROOT/config/config.yaml"; echo sd-chat > "$SD_ROOT/data/default-user/chats/a.jsonl"
+echo '{"k":"sk-SD"}' > "$SD_ROOT/data/default-user/secrets.json"; echo cookie > "$SD_ROOT/data/cookie-secret.txt"
+echo c > "$SD_ROOT/data/_cache/c"; echo w > "$SD_ROOT/data/_webpack/w"; echo e > "$SD_ROOT/extensions/x/i.js"
+mkdir -p "$SD_ROOT/data/default-user/backups"; echo old > "$SD_ROOT/data/default-user/backups/b"
+# Termux：config.yaml data plugins public/scripts/extensions/third-party（还有不该备份的 node_modules）
+mkdir -p "$TERMUX_ST/data/default-user/chats" "$TERMUX_ST/plugins" "$TERMUX_ST/public/scripts/extensions/third-party/ext" "$TERMUX_ST/node_modules/big"
+echo port > "$TERMUX_ST/config.yaml"; echo tx-chat > "$TERMUX_ST/data/default-user/chats/b.jsonl"
+echo '{"k":"sk-TX"}' > "$TERMUX_ST/data/default-user/secrets.json"; echo e > "$TERMUX_ST/public/scripts/extensions/third-party/ext/i.js"
+echo huge > "$TERMUX_ST/node_modules/big/x"
+( load
+    check "检测到三个里的两个（TT 没数据）" '[ "$(present_targets | tr "\n" " ")" = "sillydroid termux " ]'
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    FAKE_INSTALLED=1 FAKE_PIDS="" FAKE_NOW=$DAY0; tick
+    sd=$(ls "$BACKUP_DIR" | grep '^sillydroid-.*\.tar\.gz$'); tx=$(ls "$BACKUP_DIR" | grep '^termux-st-.*\.tar\.gz$')
+    check "两个都备份了" '[ -n "$sd" ] && [ -n "$tx" ]'
+    l1=$(tar -tzf "$BACKUP_DIR/$sd"); l2=$(tar -tzf "$BACKUP_DIR/$tx")
+    check "SillyDroid：聊天、配置、扩展都在" 'echo "$l1" | grep -q "data/default-user/chats/a.jsonl" && echo "$l1" | grep -q "config/config.yaml" && echo "$l1" | grep -q "extensions/x/i.js"'
+    check "SillyDroid：两种密钥都不在" '! echo "$l1" | grep -qE "secrets.json|cookie-secret" && ! tar -xzOf "$BACKUP_DIR/$sd" | grep -q "sk-SD"'
+    check "SillyDroid：缓存和它自己的备份不在" '! echo "$l1" | grep -qE "_cache|_webpack|default-user/backups/"'
+    check "Termux：聊天、config.yaml、第三方扩展都在" 'echo "$l2" | grep -q "data/default-user/chats/b.jsonl" && echo "$l2" | grep -qx "config.yaml" && echo "$l2" | grep -q "third-party/ext/i.js"'
+    check "Termux：node_modules 和密钥不在" '! echo "$l2" | grep -qE "node_modules|secrets.json"'
+    check "各自记状态" '[ -n "$(state_get last_backup_sillydroid)" ] && [ -n "$(state_get last_backup_termux)" ] && [ -z "$(state_get last_backup)" ]'
+    check "日志写明是哪个酒馆" 'grep -q "已备份并校验 SillyDroid 数据" "$LOG" && grep -q "已备份并校验 SillyTavern（Termux） 数据" "$LOG"'
+    check "检测到就设保活（记原值）" 'calls | grep -q "whitelist +com.jm.sillydroid" && calls | grep -q "whitelist +com.termux" && grep -q "^com.jm.sillydroid.whitelist=no" "$PRIOR" && grep -q "^com.termux.RUN_ANY_IN_BACKGROUND=" "$PRIOR"'
+    check "分层保留按酒馆分开：两个都是最新" '[ "$(backup_tiers | grep -c "^new ")" = 2 ]'
+    out=$(sh "$TT_MODDIR/ui.sh" status)
+    check "status 里有 targets 和每份备份的 target" 'printf "%s" "$out" | grep -q "\"id\":\"sillydroid\",\"label\":\"SillyDroid\"" && printf "%s" "$out" | grep -q "\"target\":\"termux\""'
+    : > "$CALLS"; r=$(sh "$TT_MODDIR/ui.sh" backup)
+    check "立即备份：所有检测到的都备份" 'echo "$r" | grep -q "\"ok\":true" && echo "$r" | grep -q sillydroid- && echo "$r" | grep -q termux-st-'
+    r=$(sh "$TT_MODDIR/ui.sh" backup sillydroid)
+    check "立即备份：可以只备份一个" 'echo "$r" | grep -q sillydroid- && ! echo "$r" | grep -q termux-st-'
+)
+( load
+    echo "改过的配置" > "$TERMUX_ST/config.yaml"; echo 改过 > "$TERMUX_ST/data/default-user/chats/b.jsonl"
+    tx=$(list_backups termux | grep -v prerestore | tail -n 1)
+    sh "$TT_MODDIR/restore.sh" "$tx" > "$T/r50.out"; r=$?
+    check "恢复 Termux 的备份" '[ $r = 0 ] && grep -qx tx-chat "$TERMUX_ST/data/default-user/chats/b.jsonl"'
+    check "单个文件（config.yaml）也恢复" 'grep -qx port "$TERMUX_ST/config.yaml"'
+    check "密钥不受影响" 'grep -q sk-TX "$TERMUX_ST/data/default-user/secrets.json"'
+    check "恢复前先存了一份 Termux 的" '[ -n "$(list_backups termux | grep prerestore)" ]'
+    check "日志写明酒馆" 'grep -q "从备份恢复了 SillyTavern（Termux） 数据" "$LOG"'
+    mkdir -p "$T/evil50/data/x"; ( cd "$T/evil50" && tar -czf "$BACKUP_DIR/sillydroid-19700101-000001.tar.gz" data ../../etc 2>/dev/null; tar -czf "$BACKUP_DIR/sillydroid-19700101-000002.tar.gz" data )
+    sh "$TT_MODDIR/restore.sh" sillydroid-19700101-000002.tar.gz > "$T/r50.out"; r=$?
+    check "没有用户数据的 SillyDroid 包：不恢复" '[ $r = 6 ]'
+    mkdir -p "$T/evil50b/node_modules"; ( cd "$T/evil50b" && tar -czf "$BACKUP_DIR/sillydroid-19700101-000003.tar.gz" node_modules )
+    sh "$TT_MODDIR/restore.sh" sillydroid-19700101-000003.tar.gz > /dev/null; r=$?
+    check "包里有不该有的目录：不恢复" '[ $r = 2 ] && [ ! -e "$SD_ROOT/node_modules" ]'
+)
+printf 'whitelist=yes\nRUN_IN_BACKGROUND=allow\nRUN_ANY_IN_BACKGROUND=allow\ncom.jm.sillydroid.whitelist=no\ncom.jm.sillydroid.RUN_IN_BACKGROUND=default\ncom.jm.sillydroid.RUN_ANY_IN_BACKGROUND=ignore\n' > "$TT_MODDIR/prior.txt"
+: > "$CALLS"; G50=$T/g50; cp -r "$TT_MODDIR" "$G50"; cp "$TT_MODDIR/prior.txt" "$G50/prior.txt"
+TT_GUARD_DIR=$G50 UNINSTALL_DELAY=0 sh "$TT_MODDIR/uninstall.sh"; i=0
+while [ $i -lt 50 ] && [ -d "$G50" ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done
+check "卸载：SillyDroid 撤白名单、还原后台运行" 'calls | grep -q "whitelist -com.jm.sillydroid" && calls | grep -q "appops set com.jm.sillydroid RUN_ANY_IN_BACKGROUND ignore"'
+check "卸载：没记过的 Termux 不动" '! calls | grep -q com.termux'
+unset SD_ROOT TERMUX_ST
 
 echo "[service] 不再写 /proc"
 check "没有往 /proc 写东西" '! grep -nE ">[[:space:]]*\"?(/proc|\\\$f)" "$MOD"/*.sh'
@@ -718,22 +781,48 @@ check "原值 allow 就还原成 allow" '[ "$(calls | grep -c " allow$")" = 2 ]'
 newmod 11; UNINSTALL_DELAY=0 sh "$TT_MODDIR/uninstall.sh"; wait_calls 3
 check "没有 prior 按默认" 'calls | grep -q "whitelist -com" && [ "$(calls | grep -c " default$")" = 2 ]'
 
-echo "[customize] 升级时带上原值、状态、日志"
-newmod 12; OLD=$T/old; mkdir -p "$OLD" "$T/new"
+echo "[customize] 升级：旧模块目录的数据复制到 /data/adb/tt-guard"
+newmod 12; OLD=$T/old; G=$T/guard12; mkdir -p "$OLD" "$T/new"
 echo whitelist=yes > "$OLD/prior.txt"; echo last_exit=x > "$OLD/state.txt"; echo l > "$OLD/service.log"
-echo backup=0 > "$OLD/config.txt"; echo "01-01 1 2 3 4 5 6" > "$OLD/stats.txt"
-( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD; . "$MOD/customize.sh" )
-check "prior" 'grep -qx whitelist=yes "$T/new/prior.txt"'
-check "state" 'grep -qx last_exit=x "$T/new/state.txt"'
-check "log" '[ -f "$T/new/service.log" ]'
-check "开关" 'grep -qx backup=0 "$T/new/config.txt"'
-check "统计" '[ -f "$T/new/stats.txt" ]'
-rm -rf "$T/new" "$OLD/prior.txt"; mkdir -p "$T/new"
-( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD; . "$MOD/customize.sh" )
-check "从 1.0/1.1 升级按默认" 'grep -qx whitelist=no "$T/new/prior.txt"'
-rm -rf "$T/new" "$OLD"; mkdir -p "$T/new"
-( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD; . "$MOD/customize.sh" )
-check "全新安装不写 prior" '[ ! -f "$T/new/prior.txt" ]'
+echo backup=0 > "$OLD/config.txt"; echo "01-01 1 2 3 4 5 6" > "$OLD/stats.txt"; mkdir -p "$OLD/crash/c1"
+( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD TT_GUARD_DIR=$G; . "$MOD/customize.sh" )
+check "prior" 'grep -qx whitelist=yes "$G/prior.txt"'
+check "state、日志、设置、统计、崩溃记录" 'grep -qx last_exit=x "$G/state.txt" && [ -f "$G/service.log" ] && grep -qx backup=0 "$G/config.txt" && [ -f "$G/stats.txt" ] && [ -d "$G/crash/c1" ]'
+check "数据目录只有 root 能进" '[ "$(ls -ld "$G" | cut -c1-10)" = drwx------ ]'
+echo whitelist=no > "$OLD/prior.txt"
+( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD TT_GUARD_DIR=$G; . "$MOD/customize.sh" )
+check "已有的不覆盖（再装一次）" 'grep -qx whitelist=yes "$G/prior.txt"'
+rm -rf "$G" "$OLD/prior.txt"
+( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD TT_GUARD_DIR=$G; . "$MOD/customize.sh" )
+check "从 1.0/1.1 升级按默认" 'grep -qx whitelist=no "$G/prior.txt"'
+rm -rf "$G" "$OLD"
+( ui_print() { :; }; MODPATH=$T/new OLD_MODDIR=$OLD TT_GUARD_DIR=$G; . "$MOD/customize.sh" )
+check "全新安装不写 prior" '[ ! -f "$G/prior.txt" ]'
+
+echo "[1.6] 旧版本数据迁移、禁用开关"
+newmod 13; G=$T/guard13; export TT_GUARD_DIR=$G
+echo "01-01 00:00:00 旧日志" > "$TT_MODDIR/service.log"; echo last_exit=y > "$TT_MODDIR/state.txt"
+( load; migrate_data
+  check "模块目录里的旧数据搬到数据目录" 'grep -q 旧日志 "$G/service.log" && [ ! -f "$TT_MODDIR/service.log" ] && grep -qx last_exit=y "$G/state.txt"'
+  FAKE_WL=no FAKE_RAIB=ignore; touch "$TT_MODDIR/disable"; : > "$CALLS"
+  FAKE_PIDS="" FAKE_NOW=$DAY0; tick; FAKE_NOW=$((DAY0 + 60)); tick
+  check "在管理器里禁用：不改任何设置" '[ ! -s "$CALLS" ]'
+  check "禁用：日志只记一次" '[ "$(grep -c "模块已在管理器中禁用" "$LOG")" = 1 ]'
+  rm "$TT_MODDIR/disable"; touch "$TT_MODDIR/remove"; FAKE_NOW=$((DAY0 + 120)); tick
+  check "标记删除：同样不改" '[ ! -s "$CALLS" ]'
+  rm "$TT_MODDIR/remove"; FAKE_NOW=$((DAY0 + 180)); tick
+  check "恢复启用：照常工作" 'calls | grep -q "whitelist +com.tauritavern.client"'
+)
+export TT_GUARD_DIR=$TT_MODDIR
+
+echo "[uninstall] 删除数据目录，备份留着"
+newmod 14; G=$T/guard14; mkdir -p "$G" "$PRIVATE_BK"; printf 'whitelist=no\n' > "$G/prior.txt"; echo x > "$G/state.txt"
+echo x > "$PRIVATE_BK/tt-default-user-19700101-000000.tar.gz"
+TT_GUARD_DIR=$G UNINSTALL_DELAY=0 sh "$TT_MODDIR/uninstall.sh"; i=0
+while [ $i -lt 50 ] && [ -d "$G" ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done
+check "读新位置的原值（撤白名单）" 'calls | grep -q "whitelist -com.tauritavern.client"'
+check "数据目录删掉" '[ ! -d "$G" ]'
+check "备份没删（搬到共享位置）" '[ -f "$SHARED_BK/tt-default-user-19700101-000000.tar.gz" ]'
 
 pass=$(cat "$T/pass" 2>/dev/null | wc -l | tr -d " "); failn=$(cat "$T/fail" 2>/dev/null | wc -l | tr -d " ")
 echo "通过 $pass，失败 $failn"

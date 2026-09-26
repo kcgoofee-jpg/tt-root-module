@@ -5,7 +5,9 @@
 #   ui.sh restore 文件名      从备份恢复（调 restore.sh），输出 JSON
 #   ui.sh set 开关 数字       改 config.txt 里的一个开关（只认 CONFIG_KEYS 里的），输出 JSON
 #   ui.sh list-backups        给电脑用：每行「文件名 KB sha256」
-#   ui.sh mark-pulled         给电脑用：记下「电脑刚拷走了备份」
+#   ui.sh mark-pulled [电脑名] 给电脑用：记下「电脑刚拷走了备份」和是哪台电脑
+#   ui.sh request-sync        界面「立即同步到电脑」：记下请求时间，电脑端每分钟检查一次，看到就同步
+#   ui.sh sync-info           给电脑用：一行「请求时间（没有就是 0） 最新备份文件名」，判断要不要同步
 #   ui.sh stage 文件名        给电脑用：把一份备份复制到 /data/local/tmp/tt-pull/（adb pull 能读），输出路径
 #   ui.sh unstage             给电脑用：删掉上面复制出来的
 #   ui.sh plan 天 周 月 文件名…  给电脑用：按同样的分层保留规则，输出「keep 层级 文件名」/「drop - 文件名」
@@ -59,17 +61,28 @@ status() {
     exit_records | head -n 5 | while IFS= read -r rec; do exit_line "$rec"; done | jlines
     printf ',"space":{"data":%s,"logs":%s,"cache":%s,"backups":%s},' "$(num "$sp_data")" "$(num "$sp_logs")" "$(num "$sp_cache")" "$(num "$sp_bk")"
     printf '"crashes":%s,' "$(ls -d "$CRASH_DIR"/*/ 2>/dev/null | wc -l | tr -d ' ')"
-    printf '"free":%s,"restoring":%s,"backing_up":%s,' "$(num "$(free_kb "$TT_DATA")")" \
-        "$([ -d "$MODDIR/.restore.lock" ] && echo true || echo false)" "$([ -d "$MODDIR/.backup.lock" ] && echo true || echo false)"
-    printf '"backup":{"dir":%s,"last":%s,"check":%s,"fails":%s,"mac_pulled":%s,"watch_since":%s,"items":[' \
+    printf '"free":%s,"restoring":%s,"backing_up":%s,' "$(num "$(free_kb "$(bdir)")")" \
+        "$([ -d "$GDIR/.restore.lock" ] && echo true || echo false)" "$([ -d "$GDIR/.backup.lock" ] && echo true || echo false)"
+    printf '"targets":['
+    first=1
+    for t in $TARGETS; do
+        inst=false; pm path "$(t_pkg "$t")" >/dev/null 2>&1 && inst=true
+        pres=false; t_present "$t" && pres=true
+        run=false; [ "$pres" = true ] && t_running "$t" && run=true
+        [ $first = 1 ] || printf ','; first=0
+        printf '{"id":%s,"label":%s,"pkg":%s,"installed":%s,"present":%s,"running":%s,"last":%s,"check":%s,"fails":%s,"count":%s}'             "$(js "$t")" "$(js "$(t_label "$t")")" "$(js "$(t_pkg "$t")")" "$inst" "$pres" "$run"             "$(num "$(state_get "$(t_key "$t" last_backup)")")" "$(num "$(state_get "$(t_key "$t" last_backup_check)")")"             "$(num "$(state_get "$(t_key "$t" backup_fails)")")" "$(list_backups "$t" | wc -l | tr -d ' ')"
+    done
+    printf '],'
+    printf '"backup":{"dir":%s,"last":%s,"check":%s,"fails":%s,"mac_pulled":%s,"pc_host":%s,"sync_request":%s,"watch_since":%s,"items":[' \
         "$(js "$(bdir)")" "$(num "$(state_get last_backup)")" "$(num "$(state_get last_backup_check)")" \
-        "$(num "$(state_get backup_fails)")" "$(num "$(state_get mac_pulled)")" "$(num "$(state_get watch_since)")"
+        "$(num "$(state_get backup_fails)")" "$(num "$(state_get mac_pulled)")" "$(js "$(state_get pc_host)")" \
+        "$(num "$(state_get sync_request)")" "$(num "$(state_get watch_since)")"
     d=$(bdir); first=1
     backup_tiers | while read -r tier n; do
         kb=$(du -k "$d/$n" 2>/dev/null | cut -f1)
         v=false; [ -s "$d/$n.sha256" ] && v=true
         [ $first = 1 ] || printf ','; first=0
-        printf '{"name":%s,"tier":%s,"kb":%s,"verified":%s}' "$(js "$n")" "$(js "$tier")" "$(num "$kb")" "$v"
+        printf '{"name":%s,"target":%s,"tier":%s,"kb":%s,"verified":%s}' "$(js "$n")" "$(js "$(t_of_name "$n")")" "$(js "$tier")" "$(num "$kb")" "$v"
     done
     printf ']},'
     printf '"config":{'
@@ -92,7 +105,8 @@ selftest() {
     item "模块版本" 1 "$(sed -n 's/^version=//p' "$MODDIR/module.prop")"
     if pm path "$PKG" >/dev/null 2>&1; then item "TauriTavern" 1 "已安装 $(tt_version)"; else item "TauriTavern" 0 "未安装"; fi
     if unlocked; then item "存储解锁" 1 "已解锁"; else item "存储解锁" 0 "开机后尚未解锁"; fi
-    if [ -r "$TT_DATA/default-user" ]; then item "数据目录" 1 "可读"; else item "数据目录" 0 "不可读：$TT_DATA/default-user"; fi
+    found=""; for t in $TARGETS; do t_present "$t" && found="$found、$(t_label "$t")"; done
+    if [ -n "$found" ]; then item "酒馆数据" 1 "已检测到：${found#、}"; else item "酒馆数据" 0 "未检测到任何酒馆的数据目录"; fi
     d=$(bdir)
     if mkdir -p "$d" 2>/dev/null && touch "$d/.selftest" 2>/dev/null; then rm -f "$d/.selftest"; item "备份目录" 1 "$d"; else item "备份目录" 0 "不可写：$d"; fi
     fr=$(free_kb "$d")
@@ -118,8 +132,9 @@ selftest() {
 # 诊断包：只放本模块自己的文件和系统状态摘要，不放任何聊天数据
 DIAG_DIR=${DIAG_DIR:-/data/media/0/Download}
 diag() {
-    w=$MODDIR/.diag; rm -rf "${w:?}"; mkdir -p "$w" || return 1
-    for f in service.log state.txt stats.txt config.txt prior.txt module.prop; do [ -f "$MODDIR/$f" ] && cp "$MODDIR/$f" "$w/"; done
+    w=$GDIR/.diag; rm -rf "${w:?}"; mkdir -p "$w" || return 1
+    for f in service.log state.txt stats.txt config.txt prior.txt; do [ -f "$GDIR/$f" ] && cp "$GDIR/$f" "$w/"; done
+    cp "$MODDIR/module.prop" "$w/"
     [ -d "$CRASH_DIR" ] && cp -r "$CRASH_DIR" "$w/crash"
     selftest > "$w/selftest.json"
     sh "$MODDIR/action.sh" > "$w/status.txt" 2>&1
@@ -140,16 +155,32 @@ case "${1:-}" in
     diag)
         if o=$(diag); then printf '{"ok":true,"file":%s}\n' "$(js "$o")"; else printf '{"ok":false,"msg":%s}\n' "$(js "导出失败")"; fi ;;
     backup)
+        # ui.sh backup [目标]：不给目标就备份所有检测到的酒馆
         unlocked || { printf '{"ok":false,"msg":%s}\n' "$(js "开机后尚未解锁")"; exit 0; }
-        [ -n "$(pidof "$PKG" 2>/dev/null)" ] && generating && { printf '{"ok":false,"msg":%s}\n' "$(js "正在生成回复，请稍后再试")"; exit 0; }
         space_ok || { printf '{"ok":false,"msg":%s}\n' "$(js "存储空间不足")"; exit 0; }
-        if bf=$(backup_now); then
-            now=$(date +%s)
-            state_set last_backup "$now"; state_set last_backup_check "$now"; state_set backup_fails 0
-            kb=$(du -k "$bf" 2>/dev/null | cut -f1)
-            dropped=$(apply_retention | wc -l | tr -d ' '); prune_prerestore >/dev/null
-            log "手动备份并校验了 TT 数据：${bf##*/}（$kb KB）"
-            printf '{"ok":true,"name":%s,"kb":%s,"dropped":%s}\n' "$(js "${bf##*/}")" "$(num "$kb")" "$(num "$dropped")"
+        ts=${2:-$(present_targets)}
+        [ -n "$ts" ] || { printf '{"ok":false,"msg":%s}\n' "$(js "未检测到酒馆数据")"; exit 0; }
+        names=""; total=0; skipped=""; failed=""
+        for tg in $ts; do
+            case " $TARGETS " in *" $tg "*) ;; *) continue ;; esac
+            if [ "$tg" = tt ] && [ -n "$(pidof "$PKG" 2>/dev/null)" ] && generating; then skipped="$skipped $(t_label tt)"; continue; fi
+            if bf=$(backup_now "$tg"); then
+                now=$(date +%s)
+                state_set "$(t_key "$tg" last_backup)" "$now"; state_set "$(t_key "$tg" last_backup_check)" "$now"
+                state_set "$(t_key "$tg" backup_fails)" 0
+                kb=$(du -k "$bf" 2>/dev/null | cut -f1); total=$((total + ${kb:-0}))
+                names="$names ${bf##*/}"
+                log "手动备份并校验了 $(t_label "$tg") 数据：${bf##*/}（$kb KB）"
+            else
+                failed="$failed $(t_label "$tg")"
+            fi
+        done
+        dropped=$(apply_retention | wc -l | tr -d ' '); prune_prerestore >/dev/null
+        if [ -n "$names" ]; then
+            printf '{"ok":true,"names":%s,"kb":%s,"dropped":%s,"skipped":%s,"failed":%s}\n' \
+                "$(echo $names | tr ' ' '\n' | jlines)" "$total" "$(num "$dropped")" "$(js "${skipped# }")" "$(js "${failed# }")"
+        elif [ -n "$skipped" ] && [ -z "$failed" ]; then
+            printf '{"ok":false,"msg":%s}\n' "$(js "正在生成回复，请稍后再试")"
         else
             printf '{"ok":false,"msg":%s}\n' "$(js "备份失败：另一个备份正在进行，或数据目录不可读")"
         fi ;;
@@ -157,7 +188,7 @@ case "${1:-}" in
         out=$(sh "$MODDIR/restore.sh" "${2:-}" 2>&1); rc=$?
         printf '{"rc":%s,"out":%s}\n' "$rc" "$(printf '%s\n' "$out" | jlines)" ;;
     set)
-        if [ -d "$MODDIR/.backup.lock" ] && [ "${2:-}" = backup_private ]; then
+        if [ -d "$GDIR/.backup.lock" ] && [ "${2:-}" = backup_private ]; then
             printf '{"ok":false,"msg":%s}\n' "$(js "正在备份，请稍后再改存储位置")"; exit 0
         fi
         if config_set "${2:-}" "${3:-}"; then
@@ -171,10 +202,19 @@ case "${1:-}" in
         list_backups | while IFS= read -r n; do
             echo "$n $(du -k "$d/$n" 2>/dev/null | cut -f1) $(cut -d' ' -f1 "$d/$n.sha256" 2>/dev/null)"
         done ;;
-    mark-pulled) state_set mac_pulled "$(date +%s)"; echo ok ;;
+    mark-pulled)
+        state_set mac_pulled "$(date +%s)"
+        h=$(printf '%s' "${2:-}" | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
+        [ -n "$h" ] && state_set pc_host "$h"
+        state_set sync_request ""
+        echo ok ;;
+    request-sync)
+        state_set sync_request "$(date +%s)"
+        printf '{"ok":true}\n' ;;
+    sync-info) r=$(state_get sync_request); echo "${r:-0} $(list_backups | head -n 1)" ;;   # 没有请求时第一列是 0
     stage)
         n=${2:-}
-        case "$n" in tt-default-user-[0-9]*.tar.gz) ;; *) echo "不是备份文件名" >&2; exit 2 ;; esac
+        is_bk_name "$n" || { echo "不是备份文件名" >&2; exit 2; }
         case "$n" in */*|*..*) echo "不是备份文件名" >&2; exit 2 ;; esac
         [ -f "$(bdir)/$n" ] || { echo "没有这个备份" >&2; exit 2; }
         mkdir -p "$PULL_DIR" && rm -f "$PULL_DIR"/* && cp "$(bdir)/$n" "$PULL_DIR/$n" || exit 1

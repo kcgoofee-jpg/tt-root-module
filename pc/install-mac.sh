@@ -1,5 +1,5 @@
 #!/bin/zsh
-# 在这台 Mac 上装 / 卸定时任务：每 30 分钟（和登录时）跑一次 pull-backups.sh，把手机上的 TT 备份拷过来。
+# 在这台 Mac 上装 / 卸定时任务：每分钟（和登录时）跑一次 pull-backups.sh，手机连上时自动把备份拷过来。
 #   zsh pc/install-mac.sh             安装（重复运行 = 更新）
 #   zsh pc/install-mac.sh --uninstall 卸载（已拷到电脑的备份不删）
 # 要在模块仓库的主目录里运行（定时任务记的是这个脚本所在的路径）。
@@ -24,7 +24,9 @@ cat > "$PLIST" <<PL
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array><string>/bin/zsh</string><string>$HERE/pull-backups.sh</string><string>--quiet</string></array>
-  <key>StartInterval</key><integer>1800</integer>
+  <key>StartInterval</key><integer>60</integer>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
   <key>RunAtLoad</key><true/>
   <key>ProcessType</key><string>Background</string>
   <key>LowPriorityIO</key><true/>
@@ -34,4 +36,4 @@ cat > "$PLIST" <<PL
 </plist>
 PL
 launchctl bootstrap "$DOMAIN" "$PLIST"
-print "已安装：每 30 分钟把手机上的 TT 备份拷到电脑（记录在备份文件夹的 pull.log）"
+print "已开启自动备份到这台电脑：手机连上（数据线或无线调试）后自动同步。记录在备份文件夹的 pull.log。"

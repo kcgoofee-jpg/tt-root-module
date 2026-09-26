@@ -1,0 +1,11 @@
+# 手机上运行的脚本必须是 LF，否则在手机上跑不了（Windows 上 checkout 时 git 默认会转成 CRLF）
+*.sh text eol=lf
+*.awk text eol=lf
+*.prop text eol=lf
+*.zsh text eol=lf
+*.command text eol=lf
+ksu-tt-keepalive/META-INF/** text eol=lf
+# Windows 脚本用 CRLF
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.zip binary

@@ -1,6 +1,7 @@
 #!/bin/zsh
 # 把手机上 TT 守护模块的备份拷到这台 Mac。
-#   · launchd 每 30 分钟跑一次（pc/install-mac.sh 装），「安卓保活模块」菜单也会调用。
+#   · launchd 每分钟跑一次（pc/install-mac.sh 或双击「安装自动备份（Mac）.command」装），「安卓保活模块」菜单也会调用。
+#     没连手机时立即退出；连上后先问手机有没有新备份或「立即同步」请求，没有就立即退出，所以很轻。
 #   · 只拷电脑上还没有的；拷完用手机给的 sha256 核对，对不上就丢掉、下次重拷。
 #   · 电脑上也分层保留（默认 14 天 / 8 周 / 24 个月），规则在手机上算（ui.sh plan），和 Windows 一致。
 #   · 连续 3 天没能和手机同步：发一条 macOS 通知（每天最多一次）。
@@ -66,11 +67,34 @@ A=("$adb" -s "$serial")
 # </dev/null：adb shell 会读标准输入，不挡住的话会把下面循环要读的备份名单吃掉
 root() { "${A[@]}" shell "su -c '$1'" </dev/null 2>/dev/null | tr -d '\r'; }
 [[ $(root "[ -f $MOD/ui.sh ] && echo y") == y ]] || { say "手机上没装 TT 守护模块（1.6 以上）"; stale_check; exit 2; }
+HOST=$(hostname -s 2>/dev/null | tr -cd 'A-Za-z0-9._-')
+
+# 快速判断：没有「立即同步」请求、手机上的每份备份电脑上都有、今天已经整理过 → 不用同步
+# （每小时告诉手机一次「电脑在」）。每分钟只多两次很轻的 adb 调用
+read -r req _ < <(root "sh $MOD/ui.sh sync-info")
+[[ $req == 0 ]] && req=""
+phone_list=$(root "sh $MOD/ui.sh list-backups")
+missing=0
+while read -r n _; do [[ -n $n && ! -f $DEST/$n ]] && missing=$((missing + 1)); done <<< "$phone_list"
+rm -f "$DEST"/.*.part(N)
+local_count() { ls "$DEST" 2>/dev/null | grep -cE '^(tt-default-user|sillydroid|termux-st)-[0-9]{8}-[0-9]+(-prerestore)?\.tar\.gz$'; }
+# 换了一天，或者电脑上的备份份数和上次整理时不一样（比如手动放进来几份），就再整理一次
+[[ $(cat "$DEST/.last-prune" 2>/dev/null) == "$(date +%Y%m%d) $(local_count)" ]] && pruned_today=1 || pruned_today=0
+if [[ -z ${FORCE:-} && -z $req && $missing == 0 && $pruned_today == 1 ]]; then
+    date +%s > "$DEST/.last-sync"
+    last_mark=$(cat "$DEST/.last-mark" 2>/dev/null)
+    if (( $(date +%s) - ${last_mark:-0} > 3600 )); then
+        root "sh $MOD/ui.sh mark-pulled $HOST" >/dev/null && date +%s > "$DEST/.last-mark"
+    fi
+    (( QUIET )) || print "电脑上已经是最新的"
+    exit 0
+fi
+[[ -n $req ]] && say "收到手机上的「立即同步」请求"
 
 # ---------- 拷新的 ----------
 got=0 bad=0
 while read -r name kb sha; do
-    [[ $name == tt-default-user-*.tar.gz && $sha == [0-9a-f]* && ${#sha} == 64 ]] || continue
+    [[ $name =~ '^(tt-default-user|sillydroid|termux-st)-[0-9]{8}-[0-9]{4,6}(-prerestore)?\.tar\.gz$' && $sha =~ '^[0-9a-f]{64}$' ]] || continue
     [[ -f $DEST/$name ]] && continue
     # 不能叫 path：zsh 里 path 和 PATH 是绑在一起的
     rpath=$(root "sh $MOD/ui.sh stage $name")
@@ -86,23 +110,23 @@ while read -r name kb sha; do
         say "拷贝或核对失败：$name（下次再试）"
         bad=$((bad + 1))
     fi
-done < <(root "sh $MOD/ui.sh list-backups")
+done <<< "$phone_list"
 root "sh $MOD/ui.sh unstage" >/dev/null
 rm -f "$DEST"/.*.part(N)
 
 # ---------- 电脑上的分层保留（规则在手机上算） ----------
-local_names=($(cd "$DEST" && ls tt-default-user-*.tar.gz 2>/dev/null))
+local_names=($(cd "$DEST" && ls 2>/dev/null | grep -E '^(tt-default-user|sillydroid|termux-st)-[0-9]{8}-[0-9]+\.tar\.gz$'))
 if (( ${#local_names} )); then
-    dropped=0
     root "sh $MOD/ui.sh plan ${KEEP[1]} ${KEEP[2]} ${KEEP[3]} ${local_names[*]}" | while read -r act tier n; do
-        [[ $act == drop && $n == tt-default-user-*.tar.gz && -f $DEST/$n ]] || continue
+        [[ $act == drop && $n =~ '^(tt-default-user|sillydroid|termux-st)-[0-9-]+\.tar\.gz$' && -f $DEST/$n ]] || continue
         rm -f "$DEST/$n" "$DEST/$n.sha256" && say "按分层保留清掉电脑上的旧备份：$n"
     done
 fi
 
+print -r -- "$(date +%Y%m%d) $(local_count)" > "$DEST/.last-prune"
 if (( bad == 0 )); then
     date +%s > "$DEST/.last-sync"
-    root "sh $MOD/ui.sh mark-pulled" >/dev/null
+    root "sh $MOD/ui.sh mark-pulled $HOST" >/dev/null && date +%s > "$DEST/.last-mark"
     (( got )) || { (( QUIET )) || print "电脑上已经是最新的"; }
     exit 0
 fi

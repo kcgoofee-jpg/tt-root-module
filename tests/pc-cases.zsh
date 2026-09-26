@@ -11,7 +11,7 @@ check() { if eval "$2"; then pass=$((pass + 1)); else fail=$((fail + 1)); print 
 export PHONE_MOD=$T/phone/mod PRIVATE_BK=$T/phone/bk PULL_DIR=$T/phone/tt-pull TT_DATA=$T/phone/data ADB_CALLS=$T/adb-calls
 mkdir -p "$PHONE_MOD" "$PRIVATE_BK" "$TT_DATA/default-user"
 cp "$ROOT"/ksu-tt-keepalive/*.sh "$ROOT"/ksu-tt-keepalive/*.awk "$ROOT/ksu-tt-keepalive/module.prop" "$PHONE_MOD/"
-export TT_MODDIR=$PHONE_MOD
+export TT_MODDIR=$PHONE_MOD TT_GUARD_DIR=$PHONE_MOD
 BIN=$T/bin; mkdir -p "$BIN"
 cat > "$BIN/adb" <<'EOF'
 #!/bin/sh
@@ -97,8 +97,8 @@ print "[电脑] Windows 脚本（静态检查）"
 W=$ROOT/pc/pull-backups.ps1
 check "两个 .ps1 都带 UTF-8 BOM（PowerShell 5.1 才不乱码）" '[[ $(head -c 3 "$W" | xxd -p) == efbbbf && $(head -c 3 "$ROOT/pc/install-windows.ps1" | xxd -p) == efbbbf ]]'
 check "不给自动变量 \$args 赋值" '! grep -qE "^\s*\\\$args\s*=" "$ROOT"/pc/*.ps1'
-check "和 Mac 版用同样的手机命令" 'for c in list-backups "stage \$name" unstage plan mark-pulled; do grep -q "ui.sh $c" "$W" || exit 1; done'
-check "文件名、sha256 都做了格式检查" 'grep -q "tt-default-user-\[0-9-\]+" "$W" && grep -q "\[0-9a-f\]{64}" "$W"'
+check "和 Mac 版用同样的手机命令" 'for c in list-backups "stage \$name" unstage plan mark-pulled sync-info; do grep -q "ui.sh $c" "$W" || exit 1; done'
+check "文件名、sha256 都做了格式检查" 'grep -q "(tt-default-user|sillydroid|termux-st)" "$W" && grep -q "\[0-9a-f\]{64}" "$W"'
 if command -v pwsh >/dev/null 2>&1; then
     check "PowerShell 语法" 'pwsh -NoProfile -Command "\$e=\$null; [System.Management.Automation.Language.Parser]::ParseFile(\"$W\",[ref]\$null,[ref]\$e) | Out-Null; if (\$e.Count) { exit 1 }"'
 else

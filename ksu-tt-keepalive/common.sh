@@ -6,15 +6,18 @@
 umask 022
 
 PKG=com.tauritavern.client
-MODDIR=${TT_MODDIR:-${0%/*}}
-LOG=${LOG:-$MODDIR/service.log}
-PRIOR=${PRIOR:-$MODDIR/prior.txt}
-STATE=${STATE:-$MODDIR/state.txt}
-STATS=${STATS:-$MODDIR/stats.txt}      # 每天一行的统计，留 8 天
-CONFIG=${CONFIG:-$MODDIR/config.txt}   # 开关，改完不用重启
+MODDIR=${TT_MODDIR:-${0%/*}}           # 模块目录：只放代码（更新模块时整个换掉）
+# 持久数据放在模块目录外（和 box_for_root 等模块的做法一样）：更新模块时不会丢，卸载时由 uninstall.sh 删除
+GDIR=${TT_GUARD_DIR:-/data/adb/tt-guard}
+mkdir -p "$GDIR" 2>/dev/null && chmod 700 "$GDIR" 2>/dev/null
+LOG=${LOG:-$GDIR/service.log}
+PRIOR=${PRIOR:-$GDIR/prior.txt}
+STATE=${STATE:-$GDIR/state.txt}
+STATS=${STATS:-$GDIR/stats.txt}        # 每天一行的统计，留 8 天
+CONFIG=${CONFIG:-$GDIR/config.txt}     # 开关，改完不用重启
 TT_DATA=${TT_DATA:-/data/media/0/Android/data/$PKG/data}
 TT_LOGS=${TT_LOGS:-/data/media/0/Android/data/$PKG/logs}   # TT 自己的日志和请求记录
-CRASH_DIR=${CRASH_DIR:-$MODDIR/crash}                       # TT 崩溃 / 没响应时存的记录，留 10 份
+CRASH_DIR=${CRASH_DIR:-$GDIR/crash}                       # TT 崩溃 / 没响应时存的记录，留 10 份
 ANR_DIR=${ANR_DIR:-/data/anr}
 BATTERY_TEMP=${BATTERY_TEMP:-/sys/class/power_supply/battery/temp}   # 单位 0.1°C
 # 备份放哪（config.txt 的 backup_private）：
@@ -136,7 +139,7 @@ state_get() { sed -n "s/^$1=//p" "$STATE" 2>/dev/null | head -1; }
 # 状态文件和统计文件会被好几个进程写（常驻循环、界面、电脑），改之前先拿锁，免得互相覆盖丢掉
 # 在子 shell 里跑（圆括号），不改外面的同名变量（i、r 之类）
 with_lock() (   # with_lock 锁名 命令…：最多等 5 秒；超过 60 秒的锁当作残留
-    l=$MODDIR/.$1.lock; shift; i=0
+    l=$GDIR/.$1.lock; shift; i=0
     until mkdir "$l" 2>/dev/null; do
         i=$((i + 1))
         if [ $i -gt 50 ]; then
@@ -164,8 +167,8 @@ app_uid() {
 # 开机后第一次解锁手机之前，应用的数据（包括内部存储）是加密的，读不到
 unlocked() { [ "$(getprop sys.user.0.ce_available)" = true ]; }
 
-appop_mode() {   # 输出 allow / ignore / deny / default …
-    m=$(cmd appops get "$PKG" "$1" 2>/dev/null | sed -n "s/^$1: \([a-z_]*\).*/\1/p" | head -1)
+appop_mode() {   # appop_mode 操作 [包名]：输出 allow / ignore / deny / default …
+    m=$(cmd appops get "${2:-$PKG}" "$1" 2>/dev/null | sed -n "s/^$1: \([a-z_]*\).*/\1/p" | head -1)
     echo "${m:-default}"
 }
 
@@ -278,21 +281,66 @@ net_effective() {
     dumpsys netpolicy 2>/dev/null | sed -n "s/.*UID=$1 state=.*effective=\([A-Z_|]*\).*/\1/p" | head -1
 }
 
+# ---------- 备份目标：TauriTavern、SillyDroid、Termux 里的 SillyTavern（自动检测，没有的跳过） ----------
+# 每个目标：包名、名称、数据根目录、备份哪些（相对根目录）、备份文件名前缀
+TARGETS="tt sillydroid termux"
+SD_ROOT=${SD_ROOT:-/data/data/com.jm.sillydroid/files/android-tavern/data/server}
+TERMUX_ST=${TERMUX_ST:-/data/data/com.termux/files/home/SillyTavern}
+t_pkg()    { case "$1" in tt) echo "$PKG" ;; sillydroid) echo com.jm.sillydroid ;; termux) echo com.termux ;; esac; }
+t_label()  { case "$1" in tt) echo TauriTavern ;; sillydroid) echo SillyDroid ;; termux) echo "SillyTavern（Termux）" ;; esac; }
+t_root()   { case "$1" in tt) echo "$TT_DATA" ;; sillydroid) echo "$SD_ROOT" ;; termux) echo "$TERMUX_ST" ;; esac; }
+t_prefix() { case "$1" in tt) echo tt-default-user ;; sillydroid) echo sillydroid ;; termux) echo termux-st ;; esac; }
+t_members() {
+    case "$1" in
+        tt) echo "$BACKUP_MEMBERS" ;;
+        sillydroid) echo "config data extensions plugins" ;;
+        termux) echo "config.yaml data plugins public/scripts/extensions/third-party" ;;
+    esac
+}
+# 有用户数据的那个目录（用来判断「装了而且用过」）
+t_userdir() { case "$1" in tt) echo "$TT_DATA/default-user" ;; *) echo "$(t_root "$1")/data/default-user" ;; esac; }
+t_present() { [ -d "$(t_userdir "$1")" ]; }
+# 状态文件里的键：TT 沿用 1.5 的名字，其他目标加后缀
+t_key() { if [ "$1" = tt ]; then echo "$2"; else echo "${2}_$1"; fi; }
+t_marker() { if [ "$1" = tt ]; then echo "$GDIR/backup.marker"; else echo "$GDIR/backup.$1.marker"; fi; }
+# 备份文件名 → 目标
+t_of_name() {
+    case "$1" in tt-default-user-*) echo tt ;; sillydroid-*) echo sillydroid ;; termux-st-*) echo termux ;; esac
+}
+# 目标正在运行（恢复前要先关掉）：Termux 看有没有它名下的 node 进程，别的看包进程
+t_running() {
+    if [ "$1" = termux ]; then
+        u=$(stat -c %u "${TERMUX_ST%/files/home/SillyTavern}" 2>/dev/null)
+        for p in $(pidof node 2>/dev/null); do [ "$(stat -c %u "/proc/$p" 2>/dev/null)" = "$u" ] && return 0; done
+        return 1
+    fi
+    [ -n "$(pidof "$(t_pkg "$1")" 2>/dev/null)" ]
+}
+# 已检测到的目标
+present_targets() { for pt_ in $TARGETS; do t_present "$pt_" && echo "$pt_"; done; }
+
+# 备份文件名的格式（grep -E）
+BK_RE='^(tt-default-user|sillydroid|termux-st)-[0-9]{8}-[0-9]{4}([0-9]{2})?(-prerestore)?\.tar\.gz$'
+is_bk_name() { echo "$1" | grep -qE "$BK_RE"; }
+
 # 现在的备份目录 / 另一个位置
 bdir() { if [ "$(cfg backup_private 1)" = 0 ]; then echo "$SHARED_BK"; else echo "$PRIVATE_BK"; fi; }
 other_bdir() { if [ "$(cfg backup_private 1)" = 0 ]; then echo "$PRIVATE_BK"; else echo "$SHARED_BK"; fi; }
 
-# 备份文件名，新的在前
-list_backups() { ls "$(bdir)" 2>/dev/null | grep '^tt-default-user-.*\.tar\.gz$' | sort -r; }
+# 备份文件名，按时间新的在前（所有目标混在一起）；$1 给了就只列这个目标的
+list_backups() {
+    ls "$(bdir)" 2>/dev/null | grep -E "$BK_RE" | { if [ -n "${1:-}" ]; then grep "^$(t_prefix "$1")-[0-9]"; else cat; fi; } \
+        | sed 's/^\(.*-\)\([0-9]\{8\}-[0-9]*\)\(.*\)$/\2 \1\2\3/' | sort -r | cut -d' ' -f2
+}
 
 # 私密位置只有 root 能读；共享位置给 media_rw（1023），文件管理器才能看到、删掉
 # 同一分区里 mv 会带着原来的 SELinux 标签，搬完要改成目标位置该有的标签，文件管理器才读得到
 fix_bk_perms() {
     if [ "$1" = "$PRIVATE_BK" ]; then
-        chown -R 0:0 "$1"; chmod 700 "$1"; chmod 600 "$1"/tt-default-user-*
+        chown -R 0:0 "$1"; chmod 700 "$1"; find "$1" -maxdepth 1 -type f -exec chmod 600 {} +
         command -v chcon >/dev/null && chcon -R u:object_r:adb_data_file:s0 "$1"
     else
-        chown -R 1023:1023 "$1"; chmod 775 "$1"; chmod 664 "$1"/tt-default-user-*
+        chown -R 1023:1023 "$1"; chmod 775 "$1"; find "$1" -maxdepth 1 -type f -exec chmod 664 {} +
         command -v chcon >/dev/null && chcon -R u:object_r:media_rw_data_file:s0 "$1"
     fi 2>/dev/null
 }
@@ -300,10 +348,10 @@ fix_bk_perms() {
 # 目录所在分区的剩余空间（KB）
 free_kb() { df -k "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
 
-# 空间够不够再做一份备份：留出「上一份的两倍 + 500 MB」，免得挤得 TT 自己存不了聊天
+# 空间够不够再做一份备份：留出「最近一份的两倍 + 500 MB」，免得挤得酒馆自己存不了聊天
 space_ok() {
     d=$(bdir); mkdir -p "$d" 2>/dev/null
-    newest=$(ls "$d" 2>/dev/null | grep '^tt-default-user-.*\.tar\.gz$' | sort -r | head -n 1)
+    newest=$(list_backups ${1:-} | head -n 1)
     last=$([ -n "$newest" ] && du -k "$d/$newest" 2>/dev/null | cut -f1)
     need=$(( ${last:-60000} * 2 + 512000 ))
     f=$(free_kb "$d")
@@ -313,8 +361,9 @@ space_ok() {
 # 换了位置（backup_private 改了）就把已有的备份搬过去。输出搬了几个文件
 migrate_backups() {
     to=$(bdir); from=$(other_bdir); n=0
-    for f in "$from"/tt-default-user-*; do
+    for f in "$from"/*; do
         [ -f "$f" ] || continue
+        b=${f##*/}; is_bk_name "${b%.sha256}" || continue
         mkdir -p "$to" && mv "$f" "$to/" && n=$((n + 1))
     done
     [ $n -gt 0 ] && { rmdir "$from" 2>/dev/null; fix_bk_perms "$to"; }
@@ -326,52 +375,62 @@ sha_line() {
     ( cd "$1" && { sha256sum "$2" 2>/dev/null || shasum -a 256 "$2"; } )
 }
 
-# 上次备份以后 TT 的数据有没有变（有变化才值得再备份）
+# 不进备份的东西（所有目标通用）：密钥、酒馆自己的备份、缩略图、缓存、日志、临时文件、node_modules
+EXCLUDES='*/secrets.json secrets.json */cookie-secret.txt cookie-secret.txt
+*/default-user/backups default-user/backups */default-user/thumbnails default-user/thumbnails
+*/default-user/.staging default-user/.staging */content.log content.log
+data/_cache data/_webpack data/_errors data/_uploads */node_modules'
+
+# 上次备份以后数据有没有变（有变化才值得再备份）。$1 目标
 data_changed() {
-    [ -f "$MODDIR/backup.marker" ] || return 0
-    [ -n "$(list_backups | grep -v prerestore | head -n 1)" ] || return 0   # 备份被删光了：当作有变化
-    for mem in $BACKUP_MEMBERS; do
-        [ -e "$TT_DATA/$mem" ] || continue
-        find "$TT_DATA/$mem" -type f -newer "$MODDIR/backup.marker" 2>/dev/null \
-            | grep -vE '/default-user/(backups|thumbnails|\.staging)/|/default-user/content\.log$|/secrets\.json$' \
+    m=$(t_marker "$1"); root=$(t_root "$1")
+    [ -f "$m" ] || return 0
+    [ -n "$(list_backups "$1" | grep -v prerestore | head -n 1)" ] || return 0   # 备份被删光了：当作有变化
+    for mem in $(t_members "$1"); do
+        [ -e "$root/$mem" ] || continue
+        find "$root/$mem" -type f -newer "$m" 2>/dev/null \
+            | grep -vE '/default-user/(backups|thumbnails|\.staging)/|/content\.log$|/secrets\.json$|/cookie-secret\.txt$|/data/_(cache|webpack|errors|uploads)/|/node_modules/' \
             | grep -q . && return 0
     done
     return 1
 }
 
-# 备份 TT 的数据，做完马上校验（完整读一遍、里面要有 default-user），再写 .sha256 给电脑核对。
-# 不含：API 密钥（任何位置的 secrets.json）、TT 自己的备份、缩略图、日志和临时文件。
+# 备份一个目标，做完马上校验（完整读一遍、里面要有用户数据、不能有密钥文件），再写 .sha256 给电脑核对。
+# $1 目标（默认 tt），$2 = prerestore 表示「恢复前自动存的那份」。
 # 成功输出备份文件路径，失败返回 1。同一时间只跑一个（界面上点的和定时的不会撞车）
 backup_now() {
-    [ -d "$TT_DATA/default-user" ] || return 1
+    bt_=${1:-tt}; root=$(t_root "$bt_")
+    t_present "$bt_" || return 1
     d=$(bdir); mkdir -p "$d" || return 1
-    lock=$MODDIR/.backup.lock
+    lock=$GDIR/.backup.lock
     if ! mkdir "$lock" 2>/dev/null; then
         # 超过 30 分钟的锁当作是上次断电 / 被杀留下的
         [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] || return 1
         rm -rf "${lock:?}"; mkdir "$lock" || return 1
     fi
-    touch "$MODDIR/backup.marker.new"   # 备份开始前的时间点：备份途中改的文件下次还会算「有变化」
-    name=tt-default-user-$(date +%Y%m%d-%H%M%S)${1:+-$1}.tar.gz   # $1=prerestore：恢复前自动存的那份
+    m=$(t_marker "$bt_")
+    touch "$m.new"   # 备份开始前的时间点：备份途中改的文件下次还会算「有变化」
+    name=$(t_prefix "$bt_")-$(date +%Y%m%d-%H%M%S)${2:+-$2}.tar.gz
     part=$d/.$name.part
     members=""
-    for m in $BACKUP_MEMBERS; do [ -e "$TT_DATA/$m" ] && members="$members $m"; done
+    for mem in $(t_members "$bt_"); do [ -e "$root/$mem" ] && members="$members $mem"; done
+    set -f   # EXCLUDES 里的 * 不能被 shell 展开
+    ex=""; for e in $EXCLUDES; do ex="$ex --exclude=$e"; done
     good=0
-    if nice -n 19 tar -czf "$part" -C "$TT_DATA" \
-        --exclude='*/secrets.json' --exclude=default-user/secrets.json --exclude=default-user/backups \
-        --exclude=default-user/thumbnails --exclude=default-user/content.log --exclude=default-user/.staging \
-        $members 2>/dev/null \
-        && tar -tzf "$part" > "$part.list" 2>/dev/null && grep -q '^default-user/' "$part.list" \
-        && ! grep -q 'secrets\.json$' "$part.list" \
+    if nice -n 19 tar -czf "$part" -C "$root" $ex $members 2>/dev/null \
+        && tar -tzf "$part" > "$part.list" 2>/dev/null \
+        && grep -q 'default-user/' "$part.list" \
+        && ! grep -qE '(^|/)(secrets\.json|cookie-secret\.txt)$' "$part.list" \
         && mv "$part" "$d/$name"; then
         sha_line "$d" "$name" > "$d/$name.sha256" && good=1
     fi
+    set +f
     if [ $good = 1 ]; then
-        [ -n "${1:-}" ] || mv "$MODDIR/backup.marker.new" "$MODDIR/backup.marker"
-        rm -f "$MODDIR/backup.marker.new"
+        [ -n "${2:-}" ] || mv "$m.new" "$m"
+        rm -f "$m.new"
         fix_bk_perms "$d"
     else
-        rm -f "$part" "$d/$name" "$d/$name.sha256" "$MODDIR/backup.marker.new"
+        rm -f "$part" "$d/$name" "$d/$name.sha256" "$m.new"
     fi
     rm -f "$part.list"
     # 备份途中改了备份位置：搬到新位置，免得留在界面看不到的地方
@@ -381,7 +440,7 @@ backup_now() {
     [ $good = 1 ]
 }
 
-# 按天 / 周 / 月分层保留（见 retention.awk），删掉多出来的。输出删掉的文件名
+# 按天 / 周 / 月分层保留（见 retention.awk，每个目标分开算），删掉多出来的。输出删掉的文件名
 apply_retention() {
     d=$(bdir)
     list_backups | awk -v today="$(date +%Y%m%d)" -v days="$(cfg keep_days 7)" \
@@ -392,11 +451,13 @@ apply_retention() {
     done
 }
 
-# 恢复前自动存的那几份（-prerestore）不走分层保留，单独只留最新 3 份
+# 恢复前自动存的那几份（-prerestore）不走分层保留，每个目标单独只留最新 3 份
 prune_prerestore() {
     d=$(bdir)
-    ls "$d" 2>/dev/null | grep '^tt-default-user-.*-prerestore\.tar\.gz$' | sort -r | tail -n +4 | while IFS= read -r n; do
-        rm -f "$d/$n" "$d/$n.sha256" && echo "$n"
+    for pp_ in $TARGETS; do
+        list_backups "$pp_" | grep -- '-prerestore\.tar\.gz$' | tail -n +4 | while IFS= read -r n; do
+            rm -f "$d/$n" "$d/$n.sha256" && echo "$n"
+        done
     done
 }
 
@@ -481,3 +542,15 @@ tt_space() {
 
 # KB → 「12.3 MB」
 human_kb() { awk -v k="${1:-0}" 'BEGIN { if (k >= 1024) printf "%.1f MB", k / 1024; else printf "%d KB", k }'; }
+
+# 1.6 以前持久数据放在模块目录里：搬到 GDIR（已有的不覆盖）
+migrate_data() {
+    for f in service.log prior.txt state.txt stats.txt config.txt backup.marker; do
+        [ -f "$MODDIR/$f" ] && [ ! -f "$GDIR/$f" ] && mv "$MODDIR/$f" "$GDIR/$f"
+    done
+    [ -d "$MODDIR/crash" ] && [ ! -d "$GDIR/crash" ] && mv "$MODDIR/crash" "$GDIR/crash"
+    return 0
+}
+
+# 在 KernelSU / Magisk 管理器里禁用或标记删除了本模块：停止一切改动（只等重启）
+module_disabled() { [ -f "$MODDIR/disable" ] || [ -f "$MODDIR/remove" ]; }
