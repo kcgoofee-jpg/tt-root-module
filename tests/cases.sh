@@ -1019,6 +1019,19 @@ newmod 68; ( load
     check "同步到电脑：最新备份没变时只记一次" '[ "$(grep -c " S all" "$EVENTS")" = 1 ]'
     )
 
+echo "[service] tick：冻结中进程被强制停止（换了 pid），不算解冻"
+newmod 69; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    ev=$CG_ROOT/uid_10447/pid_4978; mkdir -p "$ev"; ev=$ev/cgroup.events
+    echo "frozen 0" > "$ev"; FAKE_PIDS=4978 FAKE_GEN=0 FAKE_NOW=1000; tick
+    echo "frozen 1" > "$ev"; FAKE_NOW=1015; tick
+    check "冻结记日志" 'grep -q "TT（4978）被 Android 冻结了$" "$LOG"'
+    # 冻结中被强制停止，新进程启动（pid 变了），旧 cgroup 目录还留着 frozen 1
+    FAKE_PIDS=5588 FAKE_NOW=1076; tick
+    check "不把新进程记成解冻" '! grep -q "TT（5588）解冻" "$LOG"'
+    check "旧进程记为冻结中退出、时长仍然算对" 'grep -q "TT（4978）在冻结中退出（冻了约 61 秒）" "$LOG"'
+    )
+
 pass=$(cat "$T/pass" 2>/dev/null | wc -l | tr -d " "); failn=$(cat "$T/fail" 2>/dev/null | wc -l | tr -d " ")
 echo "通过 ${pass}，失败 $failn"
 [ "$failn" = 0 ]

@@ -611,10 +611,19 @@ root_manager() (
 # 某个温度传感器（/sys/class/thermal 里 type 等于 $1 的第一个）的整数 °C；读不到或读数不合理（没接的传感器
 # 常报 -274 / 125 之类）就什么都不输出。$2 可以给第二个候选名（不同机型叫法不同）
 THERMAL_ROOT=${THERMAL_ROOT:-/sys/class/thermal}
+# 传感器很多（这台手机上百个），每次都逐个读 type 要 0.7 秒：把「type 路径」缓存到 thermal.cache（第一行记目录，换了就重建）
+thermal_zones() {
+    tc=$GDIR/thermal.cache
+    if [ "$(head -n 1 "$tc" 2>/dev/null)" != "$THERMAL_ROOT" ]; then
+        { echo "$THERMAL_ROOT"; for z in "$THERMAL_ROOT"/thermal_zone*; do [ -f "$z/type" ] && echo "$(cat "$z/type" 2>/dev/null) $z"; done; } > "$tc.tmp" 2>/dev/null \
+            && mv "$tc.tmp" "$tc"
+    fi
+    tail -n +2 "$tc" 2>/dev/null
+}
 thermal_temp() {
+    zl=$(thermal_zones)
     for want in "$@"; do
-        for z in "$THERMAL_ROOT"/thermal_zone*; do
-            [ "$(cat "$z/type" 2>/dev/null)" = "$want" ] || continue
+        for z in $(printf '%s\n' "$zl" | awk -v w="$want" '$1 == w { print $2 }'); do
             t=$(cat "$z/temp" 2>/dev/null)
             case "$t" in ''|*[!0-9-]*) continue ;; esac
             [ "$t" -gt 1000 ] 2>/dev/null && t=$((t / 1000))   # 大多数是毫摄氏度

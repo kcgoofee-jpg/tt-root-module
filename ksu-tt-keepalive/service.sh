@@ -383,10 +383,23 @@ tick() {
         last_exit_scan=$now
     fi
 
+    # 冻结中的进程如果已经不在当前进程列表里了（被强制停止、换了 pid），
+    # 它没有经历「解冻」，别把新进程误记成解冻；记一行冻结中退出，结束这段记录
+    if [ -n "$frozen_since" ] && [ -n "$frozen_pid" ]; then
+        case " $pids " in
+            *" $frozen_pid "*) ;;
+            *)
+                log "TT（${frozen_pid}）在冻结中退出（冻了约 $((now - frozen_since)) 秒）"
+                frozen_since=""; frozen_pid=""
+                ;;
+        esac
+    fi
+
     for pid in $pids; do
         by=$(frozen_by "$pid" "$uid")
         if [ -n "$by" ] && [ -z "$frozen_since" ]; then
             frozen_since=$now
+            frozen_pid=$pid
             stat_add 4 1
             if [ "$gen" = 1 ]; then
                 stat_add 5 1
@@ -398,12 +411,12 @@ tick() {
             else
                 log "TT（${pid}）被 $by 冻结了"
             fi
-        elif [ -z "$by" ] && [ -n "$frozen_since" ]; then
+        elif [ -z "$by" ] && [ -n "$frozen_since" ] && [ "$pid" = "$frozen_pid" ]; then
             log "TT（${pid}）解冻，冻了约 $((now - frozen_since)) 秒"
-            frozen_since=""
+            frozen_since=""; frozen_pid=""
         fi
     done
-    [ -z "$pids" ] && frozen_since=""
+    [ -z "$pids" ] && { frozen_since=""; frozen_pid=""; }
 
     # 生成中网络被系统限制：提醒一次
     if [ "$gen" = 1 ] && [ -z "$net_alerted" ]; then
@@ -466,6 +479,7 @@ net_alerted=""
 gen_start=""
 idle_frozen=""
 frozen_since=""
+frozen_pid=""
 last_reopen=0
 last_day=""
 migrated=""

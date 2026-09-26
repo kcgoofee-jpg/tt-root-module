@@ -133,12 +133,13 @@ svg.i { width: 20px; height: 20px; flex: none; }
 .scan .sch span { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; }
 details.scan > .sch { cursor: pointer; margin-bottom: 0; }
 details.scan[open] > .sch { margin-bottom: 8px; }
-.hgrid { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 2px; align-items: center; }
+.hgrid { display: grid; grid-template-columns: 34px repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
 .hgrid .dl { font-size: 11px; color: var(--faint); text-align: right; padding-right: 4px; font-variant-numeric: tabular-nums; }
-.hgrid .hl { font-size: 10px; color: var(--faint); text-align: center; }
+.hgrid .hl { font-size: 10px; color: var(--faint); text-align: left; overflow: visible; white-space: nowrap; }
+.linkbtn { flex: none; border: 0; background: transparent; color: var(--accent); font-size: 12px; font-weight: 600; padding: 4px 0 4px 8px; min-height: 0; }
 .cell { aspect-ratio: 1; border-radius: 2px; background: var(--surface-2); padding: 0; border: 0; min-width: 0; }
 .cell.sel { outline: 2px solid var(--text); outline-offset: 0; }
-.blocks { display: grid; grid-template-columns: repeat(30, 1fr); gap: 2px; }
+.blocks { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 2px; }
 .slg { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 12px; color: var(--muted); }
 .slg i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 .sdet { margin-top: 6px; font-size: 12px; color: var(--muted); min-height: 1.4em; }
@@ -355,7 +356,7 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
 
   <!-- 最顶端：备份扫描（每格 1 小时）、存储块图；生成时间默认折叠 -->
   <section class="section" style="margin-top:0" aria-label="备份扫描与存储">
-    <div class="card scan"><div class="sch"><b>备份扫描</b><span>最近 14 天 · 每格 1 小时</span></div>
+    <div class="card scan"><div class="sch"><b>备份扫描</b><span id="scan-sub">每格 1 小时</span><button class="linkbtn" id="scan-more" type="button">显示 14 天</button></div>
       <div class="hgrid" id="scan" role="grid" aria-label="备份扫描"></div>
       <div class="sdet" id="scan-det" aria-live="polite">点按格子查看详情</div>
       <div class="slg"><span><i style="background:var(--ok)"></i>完整备份</span><span><i style="background:var(--accent-line)"></i>实时副本</span><span><i style="background:var(--info)"></i>恢复前备份</span><span><i style="background:var(--warn-mark)"></i>已同步到电脑</span><span><i style="background:var(--danger)"></i>失败 / 已隔离</span></div></div>
@@ -762,10 +763,23 @@ function hourGrid(el, days, now, cellFn) {
   el.innerHTML = h;
 }
 let scanSel = null;
+/* 默认只看今天；近 3 天有未处理的错误（备份失败后没再成功、有被隔离的文件）时看 3 天；可展开到 14 天 */
+let scanAll = false;
+try { scanAll = localStorage.getItem("tt-guard.scanAll") === "1"; } catch {}
+function scanErrors(d, ev) {
+  const since = d.now - 3 * 86400;
+  if ((d.broken || []).length) return true;
+  return ev.some((e) => (e.k === "F" || e.k === "X") && e.t >= since && !ev.some((b) => b.k === "B" && b.g === e.g && b.t > e.t));
+}
 function renderScan(d) {
   const now = d.now, ev = eventsOf(d), by = {};
   for (const e of ev) { const k = Math.floor(e.t / 3600); (by[k] = by[k] || []).push(e); }
-  hourGrid($("#scan"), 14, now, (t0, label) => {
+  const err = scanErrors(d, ev), days = scanAll ? 14 : err ? 3 : 1;
+  $("#scan-sub").textContent = `${days === 1 ? "今天" : `最近 ${days} 天`}${err && !scanAll ? " · 有未处理的错误" : ""} · 每格 1 小时`;
+  $("#scan-sub").classList.toggle("badc", err);
+  $("#scan-more").textContent = scanAll ? "收起" : "显示 14 天";
+  $("#scan-more").onclick = () => { scanAll = !scanAll; try { localStorage.setItem("tt-guard.scanAll", scanAll ? "1" : "0"); } catch {} renderScan(S); };
+  hourGrid($("#scan"), days, now, (t0, label) => {
     const list = by[Math.floor(t0 / 3600)] || [], top = list.reduce((a, e) => (EV_RANK[e.k] || 0) > (EV_RANK[a && a.k] || 0) ? e : a, null);
     const fut = t0 > now;
     const desc = fut ? "" : list.length ? list.filter((e) => e.k !== "G").map((e) => `${EV_NAME[e.k]}${e.g && e.g !== "all" ? "（" + (TGT[e.g] || e.g) + "）" : ""}${e.k === "L" && e.v ? " " + e.v + " 个文件" : ""}`).join("、") || "无变化" : "无变化";
@@ -775,7 +789,7 @@ function renderScan(d) {
   if (scanSel) { const b = $(`#scan .cell[data-t="${scanSel}"]`); if (b) { b.classList.add("sel"); $("#scan-det").textContent = b.dataset.d; } }
   /* 存储块图：按酒馆分色，坏块红色 */
   const items = (d.backup && d.backup.items) || [], lk = d.live_kb || {}, broken = d.broken || [];
-  const parts = [["tt", "var(--accent)"], ["sillydroid", "var(--info)"], ["termux", "var(--warn-mark)"]].map(([id, c]) => ({ id, c, kb: items.filter((it) => targetOf(it) === id).reduce((a, it) => a + (it.kb || 0), 0) }));
+  const parts = [["tt", "var(--accent)"], ["sillydroid", "var(--info)"], ["termux", "var(--faint)"]].map(([id, c]) => ({ id, c, kb: items.filter((it) => targetOf(it) === id).reduce((a, it) => a + (it.kb || 0), 0) }));
   const live = Object.values(lk).reduce((a, v) => a + (v || 0), 0), total = parts.reduce((a, p) => a + p.kb, 0) + live;
   const unit = Math.max(1024, Math.ceil(total / 150 / 1024) * 1024), n = (kb) => kb ? Math.max(1, Math.round(kb / unit)) : 0;
   let bh = "";
@@ -783,10 +797,11 @@ function renderScan(d) {
   bh += `<span class="cell" style="background:var(--accent-line)"></span>`.repeat(n(live));
   bh += broken.map((b) => `<span class="cell" title="${esc(b)}" style="background:var(--danger)"></span>`).join("");
   $("#blk").innerHTML = bh || `<span class="cell"></span>`;
-  $("#blk-sub").textContent = `共 ${kb(total)} · 每格约 ${kb(unit)} · 剩余 ${kb(d.free)}`;
+  $("#blk-sub").textContent = `${kb(total)} · 剩余 ${kb(d.free)}`;
   $("#blk-lg").innerHTML = parts.filter((p) => p.kb).map((p) => `<span><i style="background:${p.c}"></i>${esc(TGT[p.id])} ${kb(p.kb)}</span>`).join("")
     + (live ? `<span><i style="background:var(--accent-line)"></i>实时副本 ${kb(live)}</span>` : "")
-    + (broken.length ? `<span class="badc"><i style="background:var(--danger)"></i>已隔离 ${broken.length} 个</span>` : "");
+    + (broken.length ? `<span class="badc"><i style="background:var(--danger)"></i>已隔离 ${broken.length} 个</span>` : "")
+    + `<span>每格约 ${kb(unit)}</span>`;
   /* 生成时间：每小时累计秒数 */
   const gs = {}; let wk = 0;
   for (const e of ev) if (e.k === "G" && e.t > now - 7 * 86400) { const k = Math.floor(e.t / 3600); gs[k] = (gs[k] || 0) + e.v; wk += e.v; }
@@ -1245,10 +1260,14 @@ $("#alerts").addEventListener("click", (e) => {
 
 /* ---- 3.13 读取与自动刷新 ---- */
 let loading = false, again = false;
+/* 上次的状态存在本机：打开界面时先立即显示（状态读取要 1–2 秒），读到新的再替换 */
+const CACHE_KEY = "tt-guard.status";
+function cacheStatus(d) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch {} }
+function cachedStatus() { try { return JSON.parse(localStorage.getItem(CACHE_KEY) || "null"); } catch { return null; } }
 async function load(silent) {
   if (loading) { again = true; return; } loading = true;
   if (!silent) $("#refresh").classList.add("spin");
-  try { render(await ui("status")); }
+  try { const d = await ui("status"); render(d); if (HAS_KSU) cacheStatus(d); }
   catch (e) {
     if (!S) { const v = $("#verdict"); v.classList.remove("sk"); v.textContent = "无法读取状态"; $("#hero").className = "hero bad"; }
     toast("读取失败：" + e.message);
@@ -1257,7 +1276,8 @@ async function load(silent) {
   if (again) { again = false; load(true); }
 }
 $("#refresh").onclick = () => load();
-document.addEventListener("visibilitychange", () => { if (!document.hidden && !sheetOpen()) load(true); });
+/* 从别的应用切回来：先让界面显示出来，稍后再刷新（读取状态时界面可能卡住） */
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !sheetOpen()) setTimeout(() => { if (!document.hidden) load(true); }, 800); });
 setInterval(() => { if (!document.hidden && !sheetOpen() && !acting) load(true); }, 30000);
 </script>
 
@@ -1443,7 +1463,10 @@ if (!HAS_KSU) {
 }
 /* 演示：确认页里的「重新检测」依次返回运行中 → 已关闭 */
 if (!HAS_KSU) document.addEventListener("click", (e) => { demo.rechecking = !!e.target.closest("#rs-recheck, #rs-back"); }, true);
-load();
+/* 先画上次的状态，等浏览器真正画出来之后再读新的（读取期间界面可能卡住） */
+const cached = HAS_KSU ? cachedStatus() : null;
+if (cached) { try { render(cached); } catch { S = null; } setTimeout(load, 100); }
+else load();
 </script>
 </body>
 </html>
