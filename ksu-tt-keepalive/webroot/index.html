@@ -514,6 +514,7 @@ function nameTime(name) {
   return m ? Math.floor(new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime() / 1000) : null;
 }
 function whenText(name) {
+  if (isLive(name)) { const x = S && targetsOf(S).find((t) => t.id === name.slice(5)); return x && x.live ? `实时副本 · ${ago(x.live, S.now)}更新` : "实时副本"; }
   const t = nameTime(name); if (!t) return name;
   const d = new Date(t * 1000), p = (n) => String(n).padStart(2, "0");
   return `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -524,7 +525,8 @@ const shownPath = (p) => String(p || "").replace(/^(\/data\/media\/0|\/storage\/
 /* 酒馆：id → 名称；短名用于标签和筛选 */
 const TGT = { tt: "TauriTavern", sillydroid: "SillyDroid", termux: "SillyTavern（Termux）" };
 const TGT_SHORT = { tt: "TauriTavern", sillydroid: "SillyDroid", termux: "Termux" };
-const targetOf = (it) => it.target || (/^sillydroid-/.test(it.name) ? "sillydroid" : /^termux-st-/.test(it.name) ? "termux" : "tt");
+const isLive = (name) => /^live-(tt|sillydroid|termux)$/.test(name || "");
+const targetOf = (it) => it.target || (isLive(it.name) ? it.name.slice(5) : /^sillydroid-/.test(it.name) ? "sillydroid" : /^termux-st-/.test(it.name) ? "termux" : "tt");
 
 /* ---- 3.4 状态推导 ---- */
 let S = null;               // 最近一次 status
@@ -709,7 +711,7 @@ function renderTargets(d) {
     if (!x.present) return `<div class="row dim"><div class="main"><div class="title">${esc(x.label)}</div><div class="sub">未检测到数据 · 打开一次后自动检测</div></div></div>`;
     const is = targetIssue(d, x);
     const run = x.id === "tt" && d.tt.running && d.tt.generating ? "生成中" : x.running ? "运行中" : "未运行";
-    const bk = x.lt ? `${ago(x.lt, now)}备份 · ${x.count} 份` : "暂无备份";
+    const bk = (x.lt ? `${ago(x.lt, now)}备份 · ${x.count} 份` : "暂无备份") + (x.live ? ` · 实时副本 ${ago(x.live, now)}更新` : "");
     const st = is && x.count ? ` · <span class="${is[0] === "bad" ? "badc" : "warnc"}">${esc(is[1])}</span>` : "";
     return `<div class="row"><div class="main"><div class="title">${esc(x.label)}</div>
       <div class="sub num">${run} · ${esc(bk)}${st}</div></div>
@@ -842,11 +844,13 @@ function renderLog(log) {
 /* ---- 3.6 设置（改动即时生效） ---- */
 const BASIC = [
   ["backup", "自动备份", "数据变化后自动备份"],
+  ["live", "实时副本", "数据变化后复制变化的文件，TT 每次生成结束后立即复制"],
   ["notify", "异常通知", "关闭后仅记录日志"],
   ["auto_reopen", "自动重启 TT", "生成中被系统结束时重新打开"],
 ];
 const ADV = [
   ["backup_hours", "备份间隔", "数据变化时的最短间隔", [1, 2, 3, 4, 6, 8, 12, 24, 48], (v) => `${v} 小时`],
+  ["live_minutes", "实时副本间隔", "其余情况下的检查间隔", [1, 2, 3, 5, 10, 15, 30, 60], (v) => `${v} 分钟`],
   ["backup_private"],
   ["keep_days", "按天保留", "每天保留最新一份", [1, 2, 3, 5, 7, 10, 14, 21, 30, 45, 60], (v) => `${v} 天`],
   ["keep_weeks", "按周保留", "每周保留最新一份", [0, 1, 2, 3, 4, 6, 8, 12, 26, 52], (v) => v ? `${v} 周` : "不保留"],
@@ -978,19 +982,26 @@ function targetFor(name) {
   const id = targetOf({ name }), x = S && targetsOf(S).find((t) => t.id === id);
   return { id, label: (x && x.label) || TGT[id] || id, running: id === "tt" ? !!S.tt.running : !!(x && x.running) };
 }
+function liveRow(x, multi) {
+  return `<button class="row" data-pick="live-${esc(x.id)}" aria-label="从 ${esc(x.label)} 的实时副本恢复">
+    <div class="main"><div class="title num"><span class="chip">实时</span>${esc(ago(x.live, S.now))}更新</div>
+    <div class="sub num">${multi ? `<span class="chip tg">${esc(TGT_SHORT[x.id] || x.id)}</span>` : ""}${x.live_files || 0} 个文件</div></div>${IC.chev}</button>`;
+}
 function openPicker() {
-  if (!S || !S.backup.items.length) { toast("暂无备份"); return; }
-  const items = S.backup.items, multi = new Set(items.map(targetOf)).size > 1;
+  const lives = S ? targetsOf(S).filter((x) => x.present && x.live) : [];
+  if (!S || (!S.backup.items.length && !lives.length)) { toast("暂无备份"); return; }
+  const items = S.backup.items, multi = new Set(items.map(targetOf)).size > 1 || lives.length > 1;
   openSheet(`<h3 id="sheet-title">选择备份</h3><p class="lead">新的在前</p>
+    ${lives.length ? `<div class="card">${lives.map((x) => liveRow(x, multi)).join("")}</div>` : ""}
     <div class="card">${items.map((it) => backupRow(it, "data-pick", multi)).join("")}</div>
     <div class="btns"><button class="btn" data-close>取消</button></div>`);
   $$("#sheet [data-pick]").forEach((el) => el.onclick = () => openRestore(el.dataset.pick));
 }
 function openRestore(name) {
-  const it = S.backup.items.find((x) => x.name === name) || { name, kb: null, verified: false };
+  const it = S.backup.items.find((x) => x.name === name) || { name, kb: null, verified: isLive(name) };
   const tg = targetFor(name);
   openSheet(`<h3 id="sheet-title">恢复备份</h3>
-    <p class="lead num">${esc(tg.label)} · ${esc(whenText(name))} · ${kb(it.kb)} · ${it.verified ? "已校验" : "未校验"}</p>
+    <p class="lead num">${esc(tg.label)} · ${esc(whenText(name))}${isLive(name) ? "" : ` · ${kb(it.kb)} · ${it.verified ? "已校验" : "未校验"}`}</p>
     <ul class="steps">
       <li>${IC.shield}<span>恢复前自动保存当前数据</span></li>
       <li>${IC.layers}<span>覆盖同名聊天、角色卡、世界书、设置与扩展</span></li>
@@ -1162,7 +1173,7 @@ function demo(args, raw) {
   const day = (o) => { const d = new Date((now - o * D) * 1000); return `${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
   const tOf = (n) => { const m = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(n); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : 0; };
   const mk = (tg, list, base = 0) => list.map(([o, tier], i) => ({ name: stamp(now - base - o, tier === "pre" ? "prerestore" : "", tg), target: tg, tier, kb: KB[tg] - i * 120, verified: !(tg === "tt" && i === 5) }));
-  const tgt = (id, o) => Object.assign({ id, label: LABEL[id], pkg: PKG[id], installed: true, present: true, running: false, last: null, check: null, fails: 0, count: 0 }, o);
+  const tgt = (id, o) => Object.assign({ id, label: LABEL[id], pkg: PKG[id], installed: true, present: true, running: false, last: null, check: null, fails: 0, count: 0, live: now - 3 * 60, live_files: 312 }, o);
   /* 按备份文件重新计算各酒馆的份数；items 新的在前 */
   const sync = (s) => {
     s.backup.items.sort((a, b) => tOf(b.name) - tOf(a.name));
@@ -1193,7 +1204,7 @@ function demo(args, raw) {
           ...mk("sillydroid", [[5 * H, "new"], [30 * H, "2d"], [4 * D, "day"]]),
           ...mk("termux", [[26 * H, "new"], [3 * D, "day"], [9 * D, "week"]]),
         ] },
-      config: { backup: 1, backup_hours: 6, backup_private: 1, keep_days: 7, keep_weeks: 4, keep_months: 6, mac_alert_days: 3, auto_reopen: 1, notify: 1, cleanup_days: 30, temp_alert: 45 },
+      config: { backup: 1, backup_hours: 6, backup_private: 1, keep_days: 7, keep_weeks: 4, keep_months: 6, mac_alert_days: 3, auto_reopen: 1, notify: 1, cleanup_days: 30, temp_alert: 45, live: 1, live_minutes: 5 },
       log: ["开始运行（版本 1.6）", "已检测到：TauriTavern、SillyDroid、SillyTavern（Termux）", "已备份并校验 TauriTavern 数据：" + stamp(now - 8 * H) + "（45400 KB，不含 API 密钥）", "TT（4976）被 Android 冻结", "已备份并校验 SillyDroid 数据：" + stamp(now - 5 * H, "", "sillydroid") + "（18200 KB）", "已备份并校验 TauriTavern 数据：" + stamp(now - 2 * H) + "（45390 KB）；按分层保留清理 1 份旧备份"]
         .map((l, i) => `${day(0)} ${p2(8 + i)}:1${i}:0${i} ${l}`),
       _recheck: 0,
@@ -1279,7 +1290,7 @@ function demo(args, raw) {
       if (a1 === "backup_private") st.backup.dir = +a2 ? "/data/adb/tt-backups" : "/data/media/0/Documents/TauriTavern-backup";
       return wait({ ok: true }, 250);
     case "restore": {
-      const tg = /^sillydroid-/.test(a1) ? "sillydroid" : /^termux-st-/.test(a1) ? "termux" : "tt";
+      const tg = /^live-/.test(a1) ? a1.slice(5) : /^sillydroid-/.test(a1) ? "sillydroid" : /^termux-st-/.test(a1) ? "termux" : "tt";
       const t = st.targets.find((x) => x.id === tg) || {}, lb = LABEL[tg];
       const running = tg === "tt" ? st.tt.running : t.running;
       const sel = document.getElementById("demo-rc").value;

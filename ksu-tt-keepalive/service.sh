@@ -218,18 +218,18 @@ maybe_live() {
     [ "$(cfg backup 1)" = 1 ] && [ "$(cfg live 1)" = 1 ] && unlocked || return
     mins=$(cfg live_minutes 5); [ "$mins" -ge 1 ] 2>/dev/null || mins=5
     for tg in $(present_targets); do
-        k=$(t_key "$tg" live); last=$(state_get "$k"); last=${last:-0}
+        k=$(t_key "$tg" live); lv_last=$(state_get "$k"); lv_last=${lv_last:-0}
         if [ "$tg" = tt ]; then
             [ "$installed" = yes ] && [ "$gen" = 0 ] || continue
-            [ "$gen_prev" = 1 ] || [ $((now - last)) -ge $((mins * 60)) ] || continue
+            [ "$gen_prev" = 1 ] || [ $((now - lv_last)) -ge $((mins * 60)) ] || continue
         else
-            [ $((now - last)) -ge $((mins * 60)) ] || continue
+            [ $((now - lv_last)) -ge $((mins * 60)) ] || continue
         fi
         space_ok "$tg" || continue
         [ -d "$GDIR/.restore.lock" ] && continue
         if lv_n=$(live_sync "$tg"); then
             state_set "$k" "$now"
-            [ "$last" = 0 ] && log "已建立 $(t_label "$tg") 的实时副本（$lv_n 个文件）"
+            [ "$lv_last" = 0 ] && log "已建立 $(t_label "$tg") 的实时副本（$lv_n 个文件）"
         elif [ $((now - live_fail_log)) -ge 3600 ]; then
             log "$(t_label "$tg") 实时副本复制失败，稍后重试"
             live_fail_log=$now

@@ -931,6 +931,50 @@ rm -f "$T/ui65"
 check "安装时：KernelSU 提示点击模块" 'grep -q "点击本模块可打开界面" "$T/ui65"'
 export TT_GUARD_DIR=$TT_MODDIR
 
+echo "[实时副本]"
+newmod 66; ( load
+    FAKE_WL=yes FAKE_RAIB=allow FAKE_EXIT=$T/none; state_set last_exit 0
+    U=$TT_DATA/default-user; mkdir -p "$U/chats/角色 A" "$U/thumbnails"
+    echo 1 > "$U/chats/角色 A/1.jsonl"; echo k > "$U/secrets.json"; echo t > "$U/thumbnails/t"
+    L=$PRIVATE_BK/live/tt
+    FAKE_PIDS=9 FAKE_GEN=0 FAKE_NOW=$DAY0; tick
+    check "建立副本（带空格和中文的路径）" '[ -f "$L/default-user/chats/角色 A/1.jsonl" ] && grep -q "已建立 TauriTavern 的实时副本" "$LOG"'
+    check "副本不含密钥、缩略图" '[ ! -e "$L/default-user/secrets.json" ] && [ ! -e "$L/default-user/thumbnails" ]'
+    check "副本只有 root 能读" '[ "$(ls -ld "$PRIVATE_BK/live" | cut -c1-10)" = drwx------ ]'
+    check "状态里有时间和文件数" 'sh "$TT_MODDIR/ui.sh" status | grep -q "\"live\":$DAY0,\"live_files\":1"'
+    "$REAL_SLEEP" 1; echo 2 > "$U/chats/角色 A/1.jsonl"; echo n > "$U/chats/角色 A/2.jsonl"
+    FAKE_GEN=1 FAKE_NOW=$((DAY0 + 15)); tick
+    check "生成中不复制" 'grep -qx 1 "$L/default-user/chats/角色 A/1.jsonl"'
+    FAKE_GEN=0 FAKE_NOW=$((DAY0 + 30)); tick
+    check "生成结束立即复制（不等间隔）" 'grep -qx 2 "$L/default-user/chats/角色 A/2.jsonl" 2>/dev/null || grep -qx n "$L/default-user/chats/角色 A/2.jsonl"'
+    check "改过的也更新了" 'grep -qx 2 "$L/default-user/chats/角色 A/1.jsonl"'
+    "$REAL_SLEEP" 1; echo 3 > "$U/chats/角色 A/1.jsonl"
+    FAKE_NOW=$((DAY0 + 90)); tick
+    check "空闲时按间隔（5 分钟内不复制）" 'grep -qx 2 "$L/default-user/chats/角色 A/1.jsonl"'
+    FAKE_NOW=$((DAY0 + 400)); tick
+    check "到间隔就复制" 'grep -qx 3 "$L/default-user/chats/角色 A/1.jsonl"'
+    rm "$U/chats/角色 A/2.jsonl"; FAKE_NOW=$((DAY0 + 800)); tick
+    check "酒馆里删掉的文件副本里还在" '[ -f "$L/default-user/chats/角色 A/2.jsonl" ]'
+    check "没有残留的临时文件" '[ -z "$(find "$L" -name "*.part")" ]'
+    echo live=0 >> "$CONFIG"; "$REAL_SLEEP" 1; echo 4 > "$U/chats/角色 A/1.jsonl"; FAKE_NOW=$((DAY0 + 1200)); tick
+    check "关掉就不复制" 'grep -qx 3 "$L/default-user/chats/角色 A/1.jsonl"'
+    )
+# 从实时副本恢复
+L=$PRIVATE_BK/live/tt
+echo "坏了" > "$TT_DATA/default-user/chats/角色 A/1.jsonl"
+sh "$TT_MODDIR/restore.sh" live-tt > "$T/r.out"; r=$?
+check "从实时副本恢复" '[ $r = 0 ] && grep -qx 3 "$TT_DATA/default-user/chats/角色 A/1.jsonl"'
+check "恢复后副本还在" '[ -f "$L/default-user/chats/角色 A/1.jsonl" ]'
+check "恢复前先备份了当时的数据" 'ls "$PRIVATE_BK" | grep -q "prerestore"'
+check "密钥不动" 'grep -qx k "$TT_DATA/default-user/secrets.json"'
+sh "$TT_MODDIR/restore.sh" live-sillydroid > "$T/r.out"; r=$?
+check "没有副本：不恢复" '[ $r = 2 ]'
+sh "$TT_MODDIR/restore.sh" live-../../x > /dev/null; r=$?
+check "live- 后面乱写：不恢复" '[ $r = 2 ]'
+UNINSTALL_DELAY=0 sh "$TT_MODDIR/uninstall.sh"; i=0
+while [ $i -lt 50 ] && [ -d "$PRIVATE_BK" ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done
+check "卸载：副本移到共享位置" '[ -f "$SHARED_BK/实时副本/tt/default-user/chats/角色 A/1.jsonl" ] && [ ! -d "$PRIVATE_BK" ]'
+
 pass=$(cat "$T/pass" 2>/dev/null | wc -l | tr -d " "); failn=$(cat "$T/fail" 2>/dev/null | wc -l | tr -d " ")
 echo "通过 $pass，失败 $failn"
 [ "$failn" = 0 ]
